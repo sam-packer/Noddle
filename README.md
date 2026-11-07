@@ -63,6 +63,10 @@ Polish here is driven by recordings of real play, so changes can be checked agai
 - **`bun run report`** explains the newest session: a timeline, a list of moments worth checking, every movement that looked like a gesture but didn't count (with the detector's own reason), and a chart saved to `.recordings/reports/`. Pass a file to read an older one.
 - **`bun run replay`** runs the real detector over saved recordings and scores it against `scripts/labels.json`. Run it after any change to `src/lib/vision/gestures.ts`.
 - **`bun run pointer`** measures the pointer's smoothing against recorded head movement: how fast it catches up after a big move, and how much it shakes when still. Settings live in `src/lib/vision/headSmoother.ts`.
+- **Press `B` for a test run**, about three minutes. The game asks for specific picks, shakes and head movements, so every trial labels itself. It also compares settings by switching between them, in the order A B B A.
+- **`bun run benchmark`** scores test runs: hits, wrong targets, misses and false gestures, by layout and by setting.
+- **`bun run tune`** searches detector and hitbox settings using test runs. It tunes on half the trials and only recommends a change that also wins on the other half.
+- **`bun run gate`** fails if anything got worse than `scripts/baseline.json`. `bun run gate --update` accepts the current results.
 - **`bun run replay --sweep`** tries a range of detector settings against the same labels. Prefer a value in the middle of a wide range over the single best score, because a few games are easy to overfit.
 
 After a session, add what the player meant to do to `scripts/labels.json`, so that mistake stays covered by `bun run replay` from then on. Recordings stay in `.recordings`, which is not committed, and `bun run replay` skips any that aren't there.

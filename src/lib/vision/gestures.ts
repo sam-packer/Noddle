@@ -24,6 +24,10 @@ export const gestureConfig = {
 	/** The smallest gesture that counts. One player's real nods vary threefold, so this stays low. */
 	nodDeg: 2.5,
 	shakeDeg: 2.5,
+	/** A shake undoes something, so a very slow turn doesn't count. Real gentle shakes reach about 16°/s. */
+	shakeMinSpeed: 15,
+	/** A shake comes back near where it began. Turning to aim, then correcting a little, doesn't. */
+	shakeReturnShare: 0.5,
 	/** Once someone's gestures are known, they must be this share of their usual speed. Real nods */
 	/** are sharp and aiming around isn't, even though both can be the same size. */
 	personalSpeedShare: 0.55,
@@ -107,7 +111,8 @@ function inspectBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): 
 	const sizeDeg = Math.abs(peak - start[axis]);
 	if (sizeDeg < minDeg) return `only ${sizeDeg.toFixed(1)}° out, needs ${minDeg.toFixed(1)}°`;
 	const backDeg = Math.abs(peak - now[axis]);
-	if (backDeg < cfg.returnShare * sizeDeg) {
+	const needBack = axis === 'yaw' ? cfg.shakeReturnShare : cfg.returnShare;
+	if (backDeg < needBack * sizeDeg) {
 		return `only ${backDeg.toFixed(1)}° back of ${sizeDeg.toFixed(1)}° out`;
 	}
 
@@ -250,7 +255,8 @@ export class HeadGestures {
 		const cfg = gestureConfig;
 		const nod =
 			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nodSpeeds, t);
-		const shake = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
+		const looksLikeShake = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
+		const shake = looksLikeShake && looksLikeShake.speed >= cfg.shakeMinSpeed ? looksLikeShake : null;
 		const found = nod ?? shake;
 		if (!found) return null;
 		remember(shake ? this.shakeSpeeds : this.nodSpeeds, found);

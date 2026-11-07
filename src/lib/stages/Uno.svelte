@@ -82,15 +82,7 @@
 		});
 	}
 
-	const releaseCancel = targets.claimCancel(() => {
-		if (phase === 'pick') {
-			const wild = discard.pop();
-			if (wild) hand.splice(3, 0, { id: wild.id, color: 'wild', value: 'W' });
-			phase = 'play';
-		}
-	});
 	onDestroy(() => {
-		releaseCancel();
 		for (const t of timers) clearTimeout(t);
 	});
 

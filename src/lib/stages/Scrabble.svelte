@@ -127,11 +127,6 @@
 		stage = 'idle';
 	}
 
-	function recall() {
-		pending = [];
-		message = '';
-	}
-
 	function wordThrough(r: number, c: number, dr: number, dc: number) {
 		let [sr, sc] = [r, c];
 		while (letterAt(sr - dr, sc - dc)) {
@@ -348,14 +343,6 @@
 				class:focused={targets.focused === 'play'}
 			>
 				Play
-			</button>
-			<button
-				use:target={{ id: 'recall', legal: stage === 'idle' && pending.length > 0, confirm: recall }}
-				class="action bg-slate-700"
-				class:off={!(stage === 'idle' && pending.length > 0)}
-				class:focused={targets.focused === 'recall'}
-			>
-				Recall
 			</button>
 		</div>
 	</div>

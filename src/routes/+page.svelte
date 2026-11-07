@@ -3,6 +3,7 @@
 	import { smoothPointer } from '../lib/input/smoothPointer.svelte';
 	import { targets } from '../lib/input/targets.svelte';
 	import AccuracyTest from '../lib/stages/AccuracyTest.svelte';
+	import Benchmark from '../lib/stages/Benchmark.svelte';
 	import Collector from '../lib/stages/Collector.svelte';
 	import Gate from '../lib/stages/Gate.svelte';
 	import Hud from '../lib/stages/Hud.svelte';
@@ -22,6 +23,7 @@
 	let test = $state<{ train: boolean } | null>(null);
 	let recording = $state(false);
 	let collecting = $state(false);
+	let testRun = $state(false);
 	/** Shows briefly that a mistake was marked in the session log. */
 	let marked = $state(false);
 	let markTimer: ReturnType<typeof setTimeout> | undefined;
@@ -93,6 +95,10 @@
 			case 'g':
 				startRecording();
 				break;
+			case 'b':
+				engine.lockFirst();
+				testRun = true;
+				break;
 			case 'm':
 				markMistake();
 				break;
@@ -160,7 +166,9 @@
 	class="h-screen w-screen overflow-hidden bg-slate-950 text-white"
 	style:--press={engine.nodProgress}
 >
-	{#if stage === 'gate'}
+	{#if testRun}
+		<Benchmark onClose={() => (testRun = false)} />
+	{:else if stage === 'gate'}
 		<Gate />
 	{:else if stage === 'instructions'}
 		<Instructions onDone={next} />
@@ -189,7 +197,7 @@
 {/if}
 
 {#if !hud}
-	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">M marks a mistake · G records nods and shakes · C recentres · D debug</p>
+	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">B test run · M marks a mistake · C recentres · D debug</p>
 {/if}
 
 {#if marked}

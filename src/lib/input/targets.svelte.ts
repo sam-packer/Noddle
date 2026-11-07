@@ -1,4 +1,5 @@
 import { session } from '../session';
+import { hitbox } from './hitbox';
 import { engine } from '../vision/engine.svelte';
 import type { Point } from '../vision/math';
 
@@ -20,14 +21,6 @@ type Entry = { el: HTMLElement; def: TargetDef };
 const SWITCH_RATIO = 1.3;
 /** It must stay nearer this long, so a shaky pointer doesn't flicker between two targets. */
 const SWITCH_MS = 100;
-/**
- * Aim assist: the pointer selects a target from this far outside its edge, in pixels. Measured
- * against recorded aiming, this reaches every target a player goes for, and covers about a tenth
- * of the screen for a single card. When targets are closer than this, the nearest one wins.
- */
-const HITBOX_PAD_PX = 110;
-/** Once selected, a target holds on out to here, so a shaky pointer doesn't flicker on the edge. */
-const HITBOX_RELEASE_PX = 170;
 const EXACT_RELEASE_PX = 30;
 const HOLD_NO_GAZE_MS = 1000;
 /** The pointer only leans toward targets up to this wide. */
@@ -114,7 +107,7 @@ class Targets {
 	private reach(e: Entry) {
 		return e.def.exact
 			? { select: 0, keep: EXACT_RELEASE_PX }
-			: { select: HITBOX_PAD_PX, keep: HITBOX_RELEASE_PX };
+			: { select: hitbox.padPx, keep: hitbox.releasePx };
 	}
 
 	/**
