@@ -21,17 +21,15 @@ bun run dev:all      # the app and the rooms worker, with local storage
 bun run rooms:check  # plays real games over real sockets, against `bun run dev:rooms`
 ```
 
-To deploy, first create the database, then put its id in `workers/rooms/wrangler.jsonc`:
+To deploy:
 
 ```sh
-bunx wrangler d1 create noddle
-bunx wrangler d1 migrations apply noddle --remote --config workers/rooms/wrangler.jsonc
-bun run deploy:rooms
-PUBLIC_ROOMS_URL=https://<your rooms worker> bunx vite build
-bunx wrangler deploy
+bun run deploy
 ```
 
-`PUBLIC_ROOMS_URL` is fixed at build time, so build after the rooms worker has its address.
+That applies any new D1 migrations, deploys the rooms worker to `noddle-rooms.sampacker.com`, then builds and deploys the app to `noddle.sampacker.com`. In Cloudflare Workers Builds, connect the repo to the `noddle` Worker, leave the build command empty and set the deploy command to `bun run deploy`.
+
+`PUBLIC_ROOMS_URL` is fixed at build time, so it's set in the `deploy:app` script.
 
 ## Code layout
 

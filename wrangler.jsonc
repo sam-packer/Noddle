@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "triangle-ai-hackathon",
+	"name": "noddle",
 	"compatibility_date": "2026-11-07",
 	"compatibility_flags": [
 		"nodejs_als"
@@ -10,6 +10,7 @@
 		"binding": "ASSETS",
 		"directory": ".svelte-kit/cloudflare"
 	},
+	"routes": [{ "pattern": "noddle.sampacker.com", "custom_domain": true }],
 	"workers_dev": true,
 	"preview_urls": true
 }

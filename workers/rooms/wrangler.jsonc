@@ -3,6 +3,7 @@
 	"name": "noddle-rooms",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-11-07",
+	"routes": [{ "pattern": "noddle-rooms.sampacker.com", "custom_domain": true }],
 	"rules": [{ "type": "Text", "globs": ["**/*.txt"], "fallthrough": false }],
 	"durable_objects": {
 		"bindings": [{ "name": "ROOMS", "class_name": "RoomObject" }]
@@ -12,8 +13,7 @@
 		{
 			"binding": "DB",
 			"database_name": "noddle",
-			// Replace with the id from `wrangler d1 create noddle` before deploying. Local dev ignores it.
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "06b9b8d9-a0f7-489d-9e5b-6531fd92f72c",
 			"migrations_dir": "../../drizzle"
 		}
 	],
