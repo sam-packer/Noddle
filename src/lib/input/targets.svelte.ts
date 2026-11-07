@@ -99,6 +99,14 @@ class Targets {
 		if (this.history.length > 40) this.history.shift();
 	}
 
+	private legalAt(p: Point | null) {
+		if (!p) return undefined;
+		return this.legalEntries().find((e) => {
+			const r = e.el.getBoundingClientRect();
+			return p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+		});
+	}
+
 	private legalEntries() {
 		return [...this.entries.values()].filter((e) => e.def.legal);
 	}
@@ -186,6 +194,10 @@ class Targets {
 		}
 		let entry = id ? this.entries.get(id) : undefined;
 		if (!entry?.def.legal) entry = this.focused ? this.entries.get(this.focused) : undefined;
+		// The highlight trails the pointer slightly. If the pointer was already on something when
+		// the nod began, that is what the player meant, whatever was still highlighted.
+		const under = this.legalAt(engine.pointerAt(onset));
+		if (under) entry = under;
 		const point = engine.pointAt(onset);
 		session.event('confirm', {
 			chose: entry?.def.legal ? entry.def.id : null,

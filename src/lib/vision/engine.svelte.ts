@@ -800,6 +800,12 @@ class VisionEngine {
 		);
 	}
 
+	/** Where the pointer was at a moment, without averaging across movement. */
+	pointerAt(t: number): Point | null {
+		const before = this.history.findLast((h) => h.t <= t);
+		return before?.[this.active] ?? null;
+	}
+
 	sourcePointNow(s: SourceId, msBack = 800): Point | null {
 		const now = this.lastTs;
 		return medianPoint(

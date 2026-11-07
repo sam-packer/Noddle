@@ -107,8 +107,17 @@
 
 	function pickTile(i: number) {
 		heldIndex = i;
-		stage = 'held';
 		message = '';
+		const last = pending[pending.length - 1];
+		if (!last) {
+			stage = 'held';
+			return;
+		}
+		// The next tile almost always goes beside the last one, so save a nod and open there.
+		const start = (v: number) => Math.max(0, Math.min(SIZE - zoomSize, v - Math.floor(zoomSize / 2)));
+		zoom = { r0: start(last.r), c0: start(last.c), n: zoomSize };
+		stage = 'zoom';
+		session.event('zoom', { r: last.r, c: last.c, ...zoom, auto: true });
 	}
 
 	function openZoom(ctx: ConfirmContext) {
@@ -212,7 +221,7 @@
 			: stage === 'held'
 				? `Point where ${heldLetter} should go and nod to zoom in. Shake to put it back`
 				: stage === 'zoom'
-					? 'Point at a square and nod to place it. Shake to go back'
+					? 'Point at a square and nod to place it. Shake to choose somewhere else'
 					: 'You did it'
 	);
 

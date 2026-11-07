@@ -87,10 +87,12 @@ function score(say: (line: string) => void) {
 		};
 
 		const fired: { s: number; onset: number; at: number; size: number; speed: number }[] = [];
+		const shakes: number[] = [];
 		const g = new HeadGestures();
 		for (const f of frames) {
 			const e = g.push(f.t, f.y, f.p);
 			if (e?.kind === 'nod') fired.push({ s: seconds(f.t), onset: e.onset, at: f.t, size: e.sizeDeg, speed: e.speed });
+			if (e?.kind === 'shake') shakes.push(seconds(f.t));
 		}
 
 		say(`\n${name}`);
@@ -112,6 +114,11 @@ function score(say: (line: string) => void) {
 		for (const s of (want.optional ?? []) as number[]) {
 			const i = fired.findIndex((n, j) => !used.has(j) && Math.abs(n.s - s) <= MATCH_S);
 			if (i >= 0) used.add(i);
+		}
+		for (const s of (want.shouldNotShake ?? []) as number[]) {
+			const shook = shakes.some((t) => Math.abs(t - s) <= MATCH_S);
+			if (shook) problems++;
+			say(`  ${shook ? 'FALSE' : 'ok   '} ${s.toFixed(1).padStart(5)}s should not shake`);
 		}
 		for (const s of want.shouldNotFire as number[]) {
 			const i = fired.findIndex((n, j) => !used.has(j) && Math.abs(n.s - s) <= MATCH_S);

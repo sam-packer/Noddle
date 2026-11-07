@@ -46,6 +46,13 @@ export const gestureConfig = {
 	 * shake to undo a mistake must still work straight away. Played nods were at least 2s apart.
 	 */
 	nodRefractoryMs: 1500,
+	/** A shake undoes something, so a slow turn doesn't count. Played false ones reach 17°/s. */
+	shakeMinSpeed: 20,
+	/** A sharp dip counts even if the head doesn't come all the way back, because it stops there. */
+	sharpDipDeg: 3.5,
+	sharpDipSpeed: 35,
+	/** How far back up a sharp dip must bounce, as a share of the dip. */
+	sharpDipBounce: 0.25,
 	/** A shake can swing back and forth for a while, and one shake must only count once. */
 	shakeRefractoryMs: 1200
 };
@@ -67,6 +74,11 @@ const MOVING_SPAN_MS = 100;
  */
 const AIMING_RATIO = 1.5;
 const HISTORY_MS = 1800;
+/** Slower than this, the head hasn't really set off yet. */
+const SET_OFF_DEG_S = 5;
+/** A sharp nod's bottom must be this recent, and the drop to it this quick. */
+const SHARP_DIP_MS = 500;
+const SHARP_DROP_MS = 300;
 /** Gestures to see before trusting someone's usual size, and how many to remember. */
 const PERSONAL_MIN_SEEN = 3;
 const PERSONAL_MAX_SEEN = 7;
@@ -139,16 +151,52 @@ function inspectBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): 
 	if (drift > cfg.crossShare * sizeDeg) {
 		return `moved ${drift.toFixed(1)}° on the other axis during ${sizeDeg.toFixed(1)}°`;
 	}
+	// A slow drift toward the far end is still aiming. The gesture starts where the fast part does.
+	let fastI = peakI;
+	while (fastI > leftI && speedAt(buf, axis, fastI) >= SET_OFF_DEG_S) fastI--;
 	return {
-		onset: aiming ? buf[peakI].t : buf[leftI].t,
+		onset: aiming ? buf[peakI].t : buf[fastI].t,
 		sizeDeg,
 		speed: Math.max(outSpeed, backSpeed)
 	};
 }
 
+/**
+ * A deliberate nod is a fast drop and a bounce. In play the head often settles lower afterwards, so
+ * this doesn't ask it to return to where it began. Knowing where the drop began also tells us which
+ * target was meant, even if the player was still moving just before it.
+ */
+function findSharpDip(buf: S[]): Bump | null {
+	const cfg = gestureConfig;
+	const now = buf[buf.length - 1];
+	const first = buf.findIndex((s) => now.t - s.t <= SHARP_DIP_MS);
+	let bottomI = first;
+	for (let i = first; i < buf.length; i++) if (buf[i].pitch < buf[bottomI].pitch) bottomI = i;
+	if (bottomI === first || bottomI === buf.length - 1) return null;
+	let topI = bottomI;
+	for (let i = bottomI; i >= first; i--) {
+		if (buf[i].pitch > buf[topI].pitch) topI = i;
+		if (buf[bottomI].t - buf[i].t > SHARP_DROP_MS) break;
+	}
+	const sizeDeg = buf[topI].pitch - buf[bottomI].pitch;
+	if (topI === bottomI || sizeDeg < cfg.sharpDipDeg) return null;
+	if (now.pitch - buf[bottomI].pitch < cfg.sharpDipBounce * sizeDeg) return null;
+	const speed = fastest(buf, 'pitch', topI, bottomI);
+	if (speed < cfg.sharpDipSpeed) return null;
+	const across = buf.slice(topI).map((s) => s.yaw);
+	if (Math.max(...across) - Math.min(...across) > cfg.crossShare * sizeDeg) return null;
+	return { onset: buf[topI].t, sizeDeg, speed };
+}
+
 function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bump | null {
 	const result = inspectBump(buf, axis, minDeg, lookBackMs);
 	return typeof result === 'string' ? null : result;
+}
+
+/** How fast the head was moving at a sample, in degrees a second. */
+function speedAt(buf: S[], axis: Axis, i: number) {
+	const j = Math.max(i - 2, 0);
+	return (Math.abs(buf[i][axis] - buf[j][axis]) / Math.max(buf[i].t - buf[j].t, 1)) * 1000;
 }
 
 /** The fastest the head moved between two samples, in degrees a second. */
@@ -206,6 +254,7 @@ export class HeadGestures {
 	private check(kind: Gesture['kind'], axis: Axis, base: number, seen: number[], t: number) {
 		const needSpeed = this.speedNeeded(seen);
 		const looks = [
+			axis === 'pitch' ? findSharpDip(this.buf) : null,
 			findBump(this.buf, axis, base, gestureConfig.maxMs),
 			findBump(this.buf, axis, base, gestureConfig.sharpMs)
 		].filter((b) => b !== null);
@@ -250,7 +299,8 @@ export class HeadGestures {
 		const cfg = gestureConfig;
 		const nod =
 			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nodSpeeds, t);
-		const shake = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
+		const quick = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
+		const shake = quick && quick.speed >= cfg.shakeMinSpeed ? quick : null;
 		const found = nod ?? shake;
 		if (!found) return null;
 		remember(shake ? this.shakeSpeeds : this.nodSpeeds, found);
