@@ -54,7 +54,7 @@
 	});
 
 	const snap = $derived($session);
-	let lastRejected: typeof snap.rejected = null;
+	let rejectedBefore = 0;
 	const view = $derived(snap.view);
 	const me = $derived(view.me);
 
@@ -115,14 +115,12 @@
 
 	// Once the session has answered, the waiting Wild has either landed or been refused.
 	$effect(() => {
-		void snap.rejected;
 		if (pendingColor === null) return;
 		const held = view.hand.some((c) => c.id === pendingWild?.id);
-		if (!held || untrack(() => lastRejected !== snap.rejected)) {
+		if (!held || rejectedCount !== rejectedBefore) {
 			pendingWild = null;
 			pendingColor = null;
 		}
-		lastRejected = snap.rejected;
 	});
 
 	// What the player could see, so the session log says what they were trying to do.
@@ -140,22 +138,25 @@
 		});
 	});
 
+	const rejectedCount = $derived(snap.rejected?.n ?? 0);
 	$effect(() => {
-		if (snap.rejected) log.event('rejected', { reason: snap.rejected.reason });
+		if (rejectedCount) log.event('rejected', { reason: untrack(() => snap.rejected?.reason) });
 	});
 
 	// A scripted ending moves on by itself. A real one waits for the player to choose.
+	// Keyed on plain values, because each session update is a new object and must not restart this.
+	const hasEnded = $derived(!!snap.ended);
+	const advanceMs = $derived(snap.ended?.advanceMs);
 	$effect(() => {
-		const ended = snap.ended;
-		if (!ended) {
+		if (!hasEnded) {
 			endButtons = false;
 			return;
 		}
-		const delay = ended.advanceMs ?? END_BUTTONS_DELAY_MS;
+		const delay = advanceMs;
 		const timer = setTimeout(() => {
-			if (ended.advanceMs !== undefined) onDone();
+			if (delay !== undefined) onDone();
 			else endButtons = true;
-		}, delay);
+		}, delay ?? END_BUTTONS_DELAY_MS);
 		return () => clearTimeout(timer);
 	});
 
@@ -168,7 +169,7 @@
 	}
 
 	function chooseColor(color: Color) {
-		lastRejected = snap.rejected;
+		rejectedBefore = rejectedCount;
 		pendingColor = color;
 		session.send({ type: 'play', cardId: pendingWild!.id, color });
 	}
@@ -400,7 +401,7 @@
 	{/if}
 
 	{#if snap.ended && snap.ended.advanceMs === undefined}
-		<div in:fade={{ duration: 250 }} class="pointer-events-none absolute inset-0 z-[5] bg-black/70"></div>
+		<div in:fade={{ duration: 250 }} class="pointer-events-none absolute inset-0 z-[5] bg-black/80"></div>
 		<div class="end-title" in:scale={{ start: 0.5, duration: 350 }}>
 			<p class="uno-call">{snap.ended.title}</p>
 			<p class="text-2xl">{snap.ended.text}</p>

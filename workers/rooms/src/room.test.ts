@@ -49,6 +49,14 @@ describe('joining', () => {
 		expect(() => joinRoom(startRoom(withPlayers('uno', 2), 0, 1), { token: 'x', name: 'X' })).toThrow(/started/i);
 	});
 
+	test('two people with the same name can be told apart', () => {
+		let room = createRoom('ABCDE', 'uno');
+		for (const token of ['t1', 't2', 't3']) room = joinRoom(room, { token, name: '' }).room;
+		expect(room.seats.map((s) => s.name)).toEqual(['Player', 'Player 2', 'Player 3']);
+		const again = joinRoom(room, { token: 't2', name: '' }).room;
+		expect(again.seats[1].name).toBe('Player 2');
+	});
+
 	test('names are tidied and limited', () => {
 		expect(cleanName('  Sam  ')).toBe('Sam');
 		expect(cleanName('')).toBe('Player');

@@ -1,3 +1,43 @@
+# Noddle
+
+Uno and Scrabble played with head movements through a laptop webcam. The head points and a nod confirms. All vision runs in the browser, and video never leaves the device.
+
+## Playing
+
+- **Demo:** `/` opens the scripted run: instructions, a Uno hand, then a Scrabble word. It needs no server beyond the page itself, and `R` resets it.
+- **Real games:** press `P`, finish the demo and choose Play a real game, or open `/?play`. Uno is against three bots and Scrabble against one, and neither needs internet.
+- **With friends:** choose With friends from the menu. Share the room link, or the code if the other person has a keyboard. Uno takes 2 to 4 people, with bots in any empty seats, and Scrabble takes 2.
+
+Keyboard and mouse work everywhere: arrows or hover to select, Enter or click to confirm, and Esc to undo a tile.
+
+## Multiplayer
+
+The browser connects directly to a separate rooms worker in `workers/rooms`, with one Durable Object per room running the same rules engines as the page. Each player only ever receives their own view, so hidden hands and racks never reach another browser.
+
+```sh
+bun run dev:all      # the app and the rooms worker, with local storage
+bun run rooms:check  # plays real games over real sockets, against `bun run dev:rooms`
+```
+
+To deploy, first create the database, then put its id in `workers/rooms/wrangler.jsonc`:
+
+```sh
+bunx wrangler d1 create noddle
+bunx wrangler d1 migrations apply noddle --remote --config workers/rooms/wrangler.jsonc
+bun run deploy:rooms
+PUBLIC_ROOMS_URL=https://<your rooms worker> bun run build
+bunx wrangler deploy
+```
+
+`PUBLIC_ROOMS_URL` is fixed at build time, so build after the rooms worker has its address.
+
+## Code layout
+
+- `src/lib/games`: rules engines and bots. Pure, seeded, and tested with `bun test`.
+- `src/lib/session`: the Game Session the screens talk to, with demo, local and remote versions. Screens don't know which they have.
+- `src/lib/stages`: the screens.
+- `src/lib/vision`, `src/lib/input`: head tracking and targets. Run `bun run gate` after changing these, and try it on a real head.
+
 # sv
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).

@@ -66,18 +66,28 @@ export function createRoom(code: string, kind: GameKind): Room {
 	return { code, kind, phase: 'lobby', seats: [], host: 0, game: null, seq: 0, recorded: false };
 }
 
+/** Adds a number if someone else already has this name, so people can tell who moved. */
+function distinctName(name: string, others: Seat[]) {
+	const taken = new Set(others.map((s) => s.name));
+	if (!taken.has(name)) return name;
+	let n = 2;
+	while (taken.has(`${name} ${n}`)) n++;
+	return `${name} ${n}`;
+}
+
 /** Puts someone in the room: their old seat if the token matches, otherwise the next free one. */
 export function joinRoom(room: Room, { token, name }: { token: string; name: unknown }) {
 	const existing = room.seats.findIndex((s) => s.token === token);
 	if (existing >= 0) {
+		const others = room.seats.filter((_, i) => i !== existing);
 		const seats = room.seats.map((s, i) =>
-			i === existing ? { ...s, connected: true, name: cleanName(name) } : s
+			i === existing ? { ...s, connected: true, name: distinctName(cleanName(name), others) } : s
 		);
 		return { room: { ...room, seats }, seat: existing };
 	}
 	if (room.phase !== 'lobby') throw new RuleError('That game has already started.');
 	if (room.seats.length >= MAX_SEATS[room.kind]) throw new RuleError('That room is full.');
-	const seat: Seat = { name: cleanName(name), token, bot: false, connected: true };
+	const seat: Seat = { name: distinctName(cleanName(name), room.seats), token, bot: false, connected: true };
 	return { room: { ...room, seats: [...room.seats, seat] }, seat: room.seats.length };
 }
 

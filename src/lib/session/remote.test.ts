@@ -243,6 +243,21 @@ describe('losing the connection', () => {
 		session.close();
 	});
 
+	test('an address the browser refuses to open is reported, not a crash', () => {
+		const session = new RemoteSession({
+			baseUrl: '',
+			code: 'ABCDE',
+			name: 'Sam',
+			storage: memory(),
+			createSocket: () => {
+				throw new Error('SyntaxError: invalid url');
+			},
+			wait: () => new Promise(() => {})
+		});
+		expect(session.lobby.value.error).toContain("Can't reach");
+		session.close();
+	});
+
 	test('closing stops everything', async () => {
 		const { socket, session, waits } = setup();
 		socket().open();

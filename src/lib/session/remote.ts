@@ -142,7 +142,13 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 
 	private connect() {
 		const url = `${this.baseUrl.replace(/^http/, 'ws').replace(/\/$/, '')}/rooms/${this.code}/ws`;
-		const socket = this.createSocket(url);
+		let socket: RoomSocket;
+		try {
+			socket = this.createSocket(url);
+		} catch {
+			this.lobby.set({ error: "Can't reach the game server.", status: 'offline' });
+			return;
+		}
 		this.socket = socket;
 		socket.onopen = () => {
 			this.setStatus('live');

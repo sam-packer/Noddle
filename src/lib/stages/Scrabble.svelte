@@ -97,11 +97,13 @@
 	});
 
 	// A refused play stays on the board, with the reason and how to fix it.
+	// Keyed on the count, because each session update is a new object and must not repeat this.
+	const rejectedCount = $derived(snap.rejected?.n ?? 0);
 	$effect(() => {
-		const rejected = snap.rejected;
-		if (!rejected) return;
-		log.event('rejected', { reason: rejected.reason });
+		if (!rejectedCount) return;
 		untrack(() => {
+			const rejected = snap.rejected!;
+			log.event('rejected', { reason: rejected.reason });
 			submitted = false;
 			const hint = /connect to the board|centre/.test(rejected.reason)
 				? ''
@@ -141,8 +143,9 @@
 		});
 	});
 
+	const hasEnded = $derived(!!snap.ended);
 	$effect(() => {
-		const ended = snap.ended;
+		const ended = hasEnded;
 		untrack(() => {
 			if (ended) {
 				stage = 'done';
@@ -318,8 +321,8 @@
 					? 'Pass your turn?'
 					: stage === 'blank'
 						? blankGroup
-							? 'Point at the letter this blank should be'
-							: 'Which letters should this blank be among?'
+							? 'Which letter should this blank be?'
+							: 'What should this blank be? Pick a group of letters'
 						: stage === 'held'
 							? `Point where ${heldLetter} should go and nod to zoom in`
 							: stage === 'zoom'
