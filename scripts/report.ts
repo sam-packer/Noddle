@@ -151,9 +151,11 @@ function lastBefore(type: string, t: number) {
  * missed gesture can be explained by the code that missed it.
  */
 const verdicts: { t: number; nod: string | null; shake: string | null }[] = [];
+const wouldFire: { kind: string; t: number }[] = [];
 const replayed = new HeadGestures();
 for (const f of frames) {
 	const fired = replayed.push(f.t, f.y, f.p);
+	if (fired) wouldFire.push({ kind: fired.kind, t: f.t });
 	verdicts.push({
 		t: f.t,
 		nod: fired?.kind === 'nod' ? null : replayed.inspect('nod', f.t),
@@ -164,8 +166,10 @@ for (const f of frames) {
 /** What the detector was saying as this movement finished, which is when it could have fired. */
 function whyNotCounted(c: Candidate) {
 	const key = c.axis === 'pitch' ? 'nod' : 'shake';
+	if (wouldFire.some((g) => g.kind === key && g.t >= c.start && g.t <= c.end + 300)) {
+		return 'would count now with the current settings';
+	}
 	const seen = verdicts.filter((v) => v.t >= c.far && v.t <= c.end + 300).map((v) => v[key]);
-	if (seen.includes(null)) return 'would count now with the current settings';
 	const words = (v: string | null) => (v ?? '').replace(/[\d.]+/g, '#');
 	const counts = new Map<string, number>();
 	for (const v of seen) counts.set(words(v), (counts.get(words(v)) ?? 0) + 1);
