@@ -50,6 +50,13 @@
 	const PAGE_SIZE = 7;
 	/** A stray nod just after the game ends must not choose what happens next. */
 	const END_BUTTONS_DELAY_MS = 1500;
+	/** A drawn card's trip from the pile, and the gap between cards when several are drawn. */
+	const DRAW_MS = 650;
+	const DRAW_STAGGER_MS = 130;
+	/** How long a card just drawn stands out once it lands, so nobody misses what they got. */
+	const FRESH_MS = 1500;
+	/** A card back is drawn at this share of a card's size. */
+	const BACK_SCALE = 0.52;
 
 	const [send, receive] = crossfade({
 		duration: CARD_MS,
@@ -186,10 +193,99 @@
 	/** Cards this player already held, so only a newly drawn one flies in from the pile. */
 	const known = new Set<number>();
 	let arriving = new Set<number>();
+	/** Cards that just landed in the hand. */
+	let fresh = $state<number[]>([]);
+	let pileEl = $state<HTMLElement>();
+	let handEl = $state<HTMLElement>();
+	const seatEls = new Map<number, HTMLElement>();
+	/** Card backs on their way from the pile to wherever they were drawn to. */
+	type Flight = { id: number; x0: number; y0: number; x1: number; y1: number; delay: number; end: number };
+	let flights = $state<Flight[]>([]);
+	let flightId = 0;
+	/** "+2" over a player who just drew, and when it should appear. */
+	let drew = $state<Record<number, { n: number; id: number; land: number }>>({});
+
+	const stillMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 	$effect.pre(() => {
 		const ids = view.hand.map((c) => c.id);
 		arriving = new Set(ids.filter((id) => !known.has(id)));
 		for (const id of ids) known.add(id);
+		// The opening deal has no last move. Anything else that arrives was drawn.
+		if (!arriving.size || !view.last) return;
+		const [first] = arriving;
+		const landed = [...arriving];
+		untrack(() => {
+			page = Math.max(0, pageOf(first));
+			fresh = landed;
+		});
+		setTimeout(
+			() => (fresh = fresh.filter((id) => !landed.includes(id))),
+			DRAW_MS + landed.length * DRAW_STAGGER_MS + FRESH_MS
+		);
+	});
+
+	/** Sends card backs flying from the pile to a place on the table. */
+	function launch(to: HTMLElement, count: number, end: number) {
+		if (!pileEl || stillMotion()) return;
+		const from = pileEl.getBoundingClientRect();
+		const dest = to.getBoundingClientRect();
+		const added = Array.from({ length: count }, (_, i) => ({
+			id: ++flightId,
+			x0: from.left,
+			y0: from.top,
+			x1: dest.left,
+			y1: dest.top,
+			delay: i * DRAW_STAGGER_MS,
+			end
+		}));
+		flights = [...flights, ...added];
+		const ids = added.map((f) => f.id);
+		setTimeout(
+			() => (flights = flights.filter((f) => !ids.includes(f.id))),
+			DRAW_MS + count * DRAW_STAGGER_MS
+		);
+	}
+
+	function kickPile() {
+		if (!stillMotion()) {
+			pileEl?.animate([{ scale: 1 }, { scale: 1.1 }, { scale: 1 }], { duration: 260, easing: 'ease-out' });
+		}
+	}
+
+	// Watches the counts, because other players' cards are hidden and that's all there is to see.
+	const countsKey = $derived(view.counts.join());
+	let seenCounts: number[] | null = null;
+	$effect(() => {
+		void countsKey;
+		untrack(() => {
+			const was = seenCounts;
+			seenCounts = [...view.counts];
+			const last = view.last;
+			if (!was || was.length !== view.counts.length) return;
+			if (!last || last.kind === 'pass' || (last.kind === 'play' && !last.drew)) return;
+			view.counts.forEach((count, seat) => {
+				const more = count - was[seat];
+				if (more <= 0) return;
+				kickPile();
+				if (seat === me) {
+					// Cards sort into the hand, so some of them can land on a page not showing.
+					const away = [...arriving].filter((id) => !shown.some((c) => c.id === id)).length;
+					if (away && handEl) launch(handEl, away, 1);
+					return;
+				}
+				const el = seatEls.get(seat);
+				if (!el) return;
+				launch(el, more, BACK_SCALE);
+				const id = ++flightId;
+				drew = { ...drew, [seat]: { n: more, id, land: DRAW_MS + (more - 1) * DRAW_STAGGER_MS } };
+				setTimeout(() => {
+					if (drew[seat]?.id !== id) return;
+					const { [seat]: _gone, ...rest } = drew;
+					drew = rest;
+				}, DRAW_MS + more * DRAW_STAGGER_MS + FRESH_MS);
+			});
+		});
 	});
 
 	function positionOf(by: number | null | undefined) {
@@ -210,16 +306,21 @@
 		return fly(node, { ...offset, opacity: 1, duration: CARD_MS, easing: cubicOut });
 	}
 
-	/** A drawn card flies from the pile, top left, down to the hand. */
+	/** A drawn card leaves the pile face down, and turns over on its way to the hand. */
 	function dealt(node: Element, { card }: { card: Card }) {
-		if (!arriving.has(card.id)) return { duration: 0 };
-		return fly(node, {
-			x: -innerWidth * 0.45,
-			y: -innerHeight * 0.45,
-			opacity: 1,
-			duration: CARD_MS,
-			easing: cubicOut
-		});
+		if (!arriving.has(card.id) || !pileEl || stillMotion()) return { duration: 0 };
+		const from = pileEl.getBoundingClientRect();
+		const to = node.getBoundingClientRect();
+		const dx = from.left - to.left;
+		const dy = from.top - to.top;
+		return {
+			delay: [...arriving].indexOf(card.id) * DRAW_STAGGER_MS,
+			duration: DRAW_MS,
+			easing: cubicOut,
+			css: (t: number, u: number) =>
+				`z-index: 4; opacity: 1; transform: perspective(900px) translate(${dx * u}px, ${dy * u - Math.sin(t * Math.PI) * 50}px) rotateY(${u * 180}deg) scale(${1 + Math.sin(t * Math.PI) * 0.12})`,
+			tick: (t: number) => node.classList.toggle('face-down', t < 0.5)
+		};
 	}
 
 	// In a row across the middle: no neck strain, and a nod can't slide onto the next color.
@@ -247,7 +348,18 @@
 
 {#snippet seat(s: number)}
 	<div class="seat" class:active={snap.active === s}>
-		<div class="backs">
+		{#if drew[s]}
+			{#key drew[s].id}
+				<span class="drew" style:--land="{drew[s].land}ms">+{drew[s].n}</span>
+			{/key}
+		{/if}
+		<div
+			class="backs"
+			{@attach (el) => {
+				seatEls.set(s, el as HTMLElement);
+				return () => seatEls.delete(s);
+			}}
+		>
 			{#each { length: Math.min(view.counts[s], 5) } as _, i (i)}
 				<div class="back" style:transform="translateX({i * 10}px) rotate({i * 3 - 6}deg)"></div>
 			{/each}
@@ -258,6 +370,7 @@
 
 <div class="relative h-full w-full">
 	<button
+		bind:this={pileEl}
 		use:target={{
 			id: 'draw',
 			legal: view.legal.draw && !pendingWild && !leaving,
@@ -313,7 +426,7 @@
 		{/if}
 	</div>
 
-	<div class="hand">
+	<div class="hand" bind:this={handEl}>
 		{#each shown as card (card.id)}
 			{@const legal = view.legal.cards.includes(card.id) && !pendingWild}
 			<button
@@ -323,6 +436,7 @@
 				use:target={{ id: `card-${card.id}`, legal: legal && !leaving, calib: true, confirm: () => play(card) }}
 				class="uno-card"
 				class:dim={!legal}
+				class:fresh={fresh.includes(card.id)}
 				class:focused={targets.focused === `card-${card.id}`}
 				style:background={COLORS[card.color]}
 			>
@@ -361,6 +475,19 @@
 		</button>
 		<p class="pages">Page {page + 1} of {pageCount}</p>
 	{/if}
+
+	{#each flights as flight (flight.id)}
+		<div
+			class="flight"
+			style:--x0="{flight.x0}px"
+			style:--y0="{flight.y0}px"
+			style:--x1="{flight.x1}px"
+			style:--y1="{flight.y1}px"
+			style:--end={flight.end}
+			style:--ms="{DRAW_MS}ms"
+			style:animation-delay="{flight.delay}ms"
+		></div>
+	{/each}
 
 	{#if snap.ended?.won}<Confetti />{/if}
 
@@ -539,6 +666,84 @@
 	.dim {
 		opacity: 0.28;
 	}
+	/* Just drawn: readable even if it can't be played, until the player has seen what they got. */
+	.fresh {
+		opacity: 1;
+		translate: 0 -0.7rem;
+		box-shadow:
+			0 0 0 4px white,
+			0 0 36px 10px rgb(255 255 255 / 0.65);
+		transition:
+			translate 250ms ease-out,
+			opacity 400ms,
+			box-shadow 400ms;
+	}
+	/* The back of the card, while it's still turning over. Added and removed by the deal itself. */
+	.hand .uno-card:global(.face-down)::after {
+		content: '';
+		position: absolute;
+		inset: -5px;
+		border-radius: inherit;
+		border: 5px solid white;
+		background: repeating-linear-gradient(45deg, #334155 0 10px, #1e293b 10px 20px);
+	}
+	.flight {
+		position: fixed;
+		left: 0;
+		top: 0;
+		z-index: 6;
+		height: 10.5rem;
+		width: 7rem;
+		border-radius: 0.9rem;
+		border: 5px solid white;
+		background: repeating-linear-gradient(45deg, #334155 0 10px, #1e293b 10px 20px);
+		box-shadow: 0 10px 24px rgb(0 0 0 / 0.5);
+		pointer-events: none;
+		transform-origin: top left;
+		animation: fly-to-seat var(--ms) cubic-bezier(0.25, 0.8, 0.3, 1) both;
+	}
+	@keyframes fly-to-seat {
+		from {
+			transform: translate(var(--x0), var(--y0)) rotate(-6deg) scale(1);
+		}
+		to {
+			transform: translate(var(--x1), var(--y1)) rotate(5deg) scale(var(--end));
+		}
+	}
+	.drew {
+		position: absolute;
+		left: 50%;
+		top: 0.2rem;
+		z-index: 2;
+		translate: -50% 0;
+		border-radius: 0.6rem;
+		border: 3px solid white;
+		background: #b91c1c;
+		padding: 0.05rem 0.6rem;
+		font-size: 1.7rem;
+		font-weight: 900;
+		color: white;
+		animation: drew-pop 1.4s var(--land) both;
+	}
+	@keyframes drew-pop {
+		0% {
+			opacity: 0;
+			scale: 0.4;
+		}
+		18% {
+			opacity: 1;
+			scale: 1.2;
+		}
+		30%,
+		80% {
+			opacity: 1;
+			scale: 1;
+		}
+		100% {
+			opacity: 0;
+			scale: 1;
+		}
+	}
 	.focused {
 		z-index: 3;
 		transform: translateY(calc(-1.6rem + var(--press, 0) * 1.6rem))
@@ -549,6 +754,7 @@
 		opacity: 1;
 	}
 	.seat {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
