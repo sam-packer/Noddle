@@ -1,13 +1,13 @@
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { session } from '../session';
 import { HeadGestures, type Gesture } from './gestures';
-import { HeadSmoother } from './headSmoother';
 import {
 	faceBox,
 	headAngles,
 	irisPx,
 	median,
 	medianPoint,
+	OneEuro,
 	OneEuro2D,
 	type FaceBox,
 	type Lm,
@@ -35,6 +35,8 @@ export const setup = {
 	headFlipX: false,
 	/** Eye tracking stays in the code but off: head tracking is the demo, and this saves the CPU. */
 	eyeModels: false,
+	/** Head movement smaller than this leaves the pointer exactly where it is. */
+	headDeadbandDeg: 0.6,
 	minFaceWidth: 0.06,
 	maxFaceWidth: 0.4,
 	maxPoseDeg: 40,
@@ -81,7 +83,7 @@ export type DataFrame = {
 type Sample = { target: Point; headFeatures: number[]; headDefault: Point };
 
 /** How much of each signal is median filtered, in ms. Eye models get long windows, for nystagmus. */
-const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 0 };
+const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 100 };
 /** Keep holding the selection briefly after a gesture, while the head returns to rest. */
 const HOLD_AFTER_GESTURE_MS = 400;
 /** Taking control is a clear nod, because anyone in view could trigger it by accident. */
@@ -190,7 +192,7 @@ class VisionEngine {
 	private filters: Record<SourceId, OneEuro2D> = {
 		free: new OneEuro2D(0.5, 0.004),
 		calibrated: new OneEuro2D(0.8, 0.004),
-		head: new OneEuro2D()
+		head: new OneEuro2D(1.2, 0.01)
 	};
 	private rawFreeAngles: { yaw: number; pitch: number } | null = null;
 	private lastFace: { eye: { X: number; Y: number; Z: number } } | null = null;
@@ -204,7 +206,8 @@ class VisionEngine {
 	private headNeutral: { yaw: number; pitch: number } | null = null;
 	private heldYaw: number | null = null;
 	private heldPitch: number | null = null;
-	private headSmoother = new HeadSmoother();
+	private headSmoothYaw = new OneEuro(1.5, 0.02);
+	private headSmoothPitch = new OneEuro(1.5, 0.02);
 	private recording: Record<string, unknown>[] | null = null;
 	private headNeutralAfter = 0;
 	private lastLockedBox: FaceBox | null = null;
@@ -584,7 +587,8 @@ class VisionEngine {
 		this.headNeutral = null;
 		this.heldYaw = null;
 		this.heldPitch = null;
-		this.headSmoother.reset();
+		this.headSmoothYaw.reset();
+		this.headSmoothPitch.reset();
 		this.samples = [];
 		this.history = [];
 		this.recent = { free: [], calibrated: [], head: [] };
@@ -654,9 +658,16 @@ class VisionEngine {
 		// Head pointer: rotation only. Iris position and size must stay out of this, because
 		// they follow the eyes and would make the pointer move when the head has not.
 		const { yaw, pitch } = headAngles(matrix.data);
-		const steady = this.headSmoother.push(ts, yaw, pitch);
-		this.heldYaw = steady.yaw;
-		this.heldPitch = steady.pitch;
+		const smoothYaw = this.headSmoothYaw.filter(yaw, ts);
+		const smoothPitch = this.headSmoothPitch.filter(pitch, ts);
+		const drag = (held: number | null, value: number) => {
+			if (held === null) return value;
+			const delta = value - held;
+			if (Math.abs(delta) <= setup.headDeadbandDeg) return held;
+			return value - Math.sign(delta) * setup.headDeadbandDeg;
+		};
+		this.heldYaw = drag(this.heldYaw, smoothYaw);
+		this.heldPitch = drag(this.heldPitch, smoothPitch);
 		if (!this.headNeutral && ts >= this.headNeutralAfter) {
 			this.headNeutral = { yaw: this.heldYaw, pitch: this.heldPitch };
 		}
@@ -675,11 +686,6 @@ class VisionEngine {
 		const next: Record<SourceId, Point | null> = { free: null, calibrated: null, head: null };
 		for (const s of SOURCES) {
 			const r = this.raw[s];
-			// The head is already steadied, and more smoothing only makes the pointer trail behind.
-			if (s === 'head') {
-				next.head = r;
-				continue;
-			}
 			const queue = this.recent[s];
 			if (r && Number.isFinite(r.x) && Number.isFinite(r.y)) queue.push({ t: ts, p: r });
 			while (queue.length && ts - queue[0].t > SMOOTH_MS[s]) queue.shift();

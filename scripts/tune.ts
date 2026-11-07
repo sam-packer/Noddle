@@ -10,9 +10,7 @@ import { loadRuns, scoreRuns, type Trial } from './trials';
 const SEARCH: Record<string, number[]> = {
 	nodDeg: [2, 2.5, 3, 3.5, 4],
 	shakeDeg: [2.5, 3, 4, 5],
-	shakeMinSpeed: [15, 20, 30, 40],
 	returnShare: [0.4, 0.5, 0.6, 0.7],
-	shakeReturnShare: [0.5, 0.6, 0.7, 0.8],
 	maxMs: [800, 1000, 1300],
 	holdMs: [300, 450, 650],
 	crossShare: [0.5, 0.7, 1],

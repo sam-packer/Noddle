@@ -1,8 +1,9 @@
 import { OneEuro } from './math';
 
 /**
- * How the head's angles are steadied before they move the pointer. Tune these with `bun run pointer`,
- * which measures how fast the pointer catches up after a big move and how much it shakes when still.
+ * An experiment, not used by the game. In real play it made aiming worse, even though `bun run pointer`
+ * scored it far better: that replay can't show how a player reacts to the pointer. Only a change
+ * tested by a player, such as a setting compared in a B test run, should replace the game's smoothing.
  */
 export const smootherConfig = {
 	/** Steadiness when the head is nearly still. Lower shakes less but trails more. */

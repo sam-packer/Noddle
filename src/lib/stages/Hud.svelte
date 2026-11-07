@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { engine, setup, SOURCES, type SourceId } from '../vision/engine.svelte';
 	import { gestureConfig } from '../vision/gestures';
-	import { smootherConfig } from '../vision/headSmoother';
 	import { testLog } from './testlog.svelte';
 
 	let { onTest, onRecord }: { onTest: (train: boolean) => void; onRecord: () => void } = $props();
@@ -13,7 +12,7 @@
 	let cropY = $state(Math.round(setup.cropOffsetY * 100));
 	let rangeYaw = $state(setup.headRangeYawDeg);
 	let rangePitch = $state(setup.headRangePitchDeg);
-	let deadband = $state(smootherConfig.deadbandDeg);
+	let deadband = $state(setup.headDeadbandDeg);
 	let rangeDown = $state(setup.headRangeDownDeg);
 	let copied = $state(false);
 
@@ -25,7 +24,7 @@
 		setup.cropOffsetY = cropY / 100;
 		setup.headRangeYawDeg = rangeYaw;
 		setup.headRangePitchDeg = rangePitch;
-		smootherConfig.deadbandDeg = deadband;
+		setup.headDeadbandDeg = deadband;
 		setup.headRangeDownDeg = rangeDown;
 	});
 
@@ -114,7 +113,7 @@
 		<input aria-label="Head range upward" type="number" step="1" min="3" max="45" bind:value={rangePitch} />
 		<input aria-label="Head range downward" type="number" step="1" min="2" max="45" bind:value={rangeDown} />
 		<label for="dz">Still°</label>
-		<input id="dz" type="number" step="0.05" min="0" max="2" bind:value={deadband} />
+		<input id="dz" type="number" step="0.1" min="0" max="5" bind:value={deadband} />
 	</div>
 
 	<div class="mt-2 flex items-center gap-1">
