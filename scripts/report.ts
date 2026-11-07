@@ -5,6 +5,8 @@
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { HeadGestures } from '../src/lib/vision/gestures';
+import { findCandidates, type Candidate, type Frame } from './candidates';
 
 type Row = Record<string, any>;
 
@@ -14,6 +16,11 @@ const UNDONE_WITHIN_S = 3;
 /** A nod this soon after the last one is suspicious. Played nods were at least 2s apart. */
 const TOO_SOON_S = 1.5;
 const CHART_ROW_S = 25;
+/** Slower or smaller than this doesn't look like an attempt, so it isn't listed as a miss. */
+const ATTEMPT_MIN_DEG = 2.5;
+const ATTEMPT_MIN_SPEED = 20;
+/** How far back to look for what led up to a marked mistake. */
+const MISTAKE_LOOKBACK_S = 4;
 
 function newestSession() {
 	const files = readdirSync(DIR)
@@ -112,7 +119,7 @@ for (const e of events) {
 			}
 			lastRejected = e.t;
 			counts.rejected++;
-			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° ${Math.round(e.speed)}°/s, needed ${e.needDeg.toFixed(1)}° ${Math.round(e.needSpeed)}°/s`);
+			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° at ${Math.round(e.speed)}°/s, needed ${Math.round(e.needSpeed)}°/s`);
 			break;
 		case 'mistake':
 			counts.mistakes++;
@@ -134,6 +141,80 @@ for (const e of events) {
 	}
 }
 
+/** The last value of a logged thing before a moment. */
+function lastBefore(type: string, t: number) {
+	return events.findLast((e) => e.e === type && e.t <= t);
+}
+
+/**
+ * Replays the session through the real detector and notes what it thought on each frame, so a
+ * missed gesture can be explained by the code that missed it.
+ */
+const verdicts: { t: number; nod: string | null; shake: string | null }[] = [];
+const replayed = new HeadGestures();
+for (const f of frames) {
+	const fired = replayed.push(f.t, f.y, f.p);
+	verdicts.push({
+		t: f.t,
+		nod: fired?.kind === 'nod' ? null : replayed.inspect('nod', f.t),
+		shake: fired?.kind === 'shake' ? null : replayed.inspect('shake', f.t)
+	});
+}
+
+/** What the detector was saying as this movement finished, which is when it could have fired. */
+function whyNotCounted(c: Candidate) {
+	const key = c.axis === 'pitch' ? 'nod' : 'shake';
+	const seen = verdicts.filter((v) => v.t >= c.far && v.t <= c.end + 300).map((v) => v[key]);
+	if (seen.includes(null)) return 'would count now with the current settings';
+	const words = (v: string | null) => (v ?? '').replace(/[\d.]+/g, '#');
+	const counts = new Map<string, number>();
+	for (const v of seen) counts.set(words(v), (counts.get(words(v)) ?? 0) + 1);
+	const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+	return seen.find((v) => words(v) === top) ?? 'no frames to judge';
+}
+
+/**
+ * Movements shaped like a gesture that never fired, found from the head data itself. Anything the
+ * detector ignores leaves no event, so this is the only way to see a missed nod.
+ */
+function findMisses() {
+	const gestures = events.filter((e) => e.e === 'gesture');
+	const misses: { c: Candidate; selected: string | null; why: string }[] = [];
+	const list = [...findCandidates(frames as Frame[], 'pitch'), ...findCandidates(frames as Frame[], 'yaw')];
+	for (const c of list.sort((a, b) => a.start - b.start)) {
+		if (c.sizeDeg < ATTEMPT_MIN_DEG || c.speed < ATTEMPT_MIN_SPEED) continue;
+		const kind = c.axis === 'pitch' ? 'nod' : 'shake';
+		if (gestures.some((g) => g.kind === kind && g.at >= c.start && g.at <= c.end + 300)) continue;
+		const last = misses[misses.length - 1];
+		if (last && last.c.axis === c.axis && c.start < last.c.end) continue;
+		const selected = lastBefore('focus', c.start)?.id ?? null;
+		// A nod with nothing selected couldn't have done anything, but a shake always can.
+		if (c.axis === 'pitch' && !selected) continue;
+		misses.push({ c, selected, why: whyNotCounted(c) });
+	}
+	return misses;
+}
+
+const misses = findMisses();
+
+/** What led up to a mistake the player marked. */
+function mistakeContext(mark: Row) {
+	const recent = events.filter(
+		(e) =>
+			e.t <= mark.t &&
+			e.t >= mark.t - MISTAKE_LOOKBACK_S * 1000 &&
+			['gesture', 'confirm', 'cancel', 'place', 'zoom'].includes(e.e)
+	);
+	const picks = recent.filter((e) => e.e === 'confirm').map((e) => `${stamp(e.t).trim()} chose ${e.chose ?? 'nothing'}`);
+	const missed = misses.filter((m) => m.c.end <= mark.t && m.c.end >= mark.t - MISTAKE_LOOKBACK_S * 1000);
+	const notes = [...picks, ...missed.map((m) => `${stamp(m.c.far).trim()} ${m.c.axis === 'pitch' ? 'nod' : 'shake'} did not count`)];
+	return notes.length ? notes.join('; ') : 'nothing happened in the seconds before';
+}
+
+for (const mark of events.filter((e) => e.e === 'mistake')) {
+	checks.push(`${stamp(mark.t)} leading up to that mistake: ${mistakeContext(mark)}`);
+}
+
 console.log(`Session ${basename(path)}: ${Math.round(sec(frames[frames.length - 1].t))}s, ${frames.length} frames`);
 console.log(lines.join('\n'));
 console.log(
@@ -141,6 +222,12 @@ console.log(
 		`${counts.rejected} turned down, ${counts.mistakes} marked mistakes`
 );
 console.log(checks.length ? `\nWorth checking:\n  ${checks.join('\n  ')}` : '\nNothing obviously wrong.');
+const missLines = misses.map(
+	(m) =>
+		`${stamp(m.c.far)} ${m.c.axis === 'pitch' ? 'nod' : 'shake'} ${m.c.sizeDeg.toFixed(1)}° ${Math.round(m.c.speed)}°/s` +
+		`${m.selected ? ` on ${m.selected}` : ''}: ${m.why}`
+);
+console.log(missLines.length ? `\nLooked like a gesture but did not count:\n  ${missLines.join('\n  ')}` : '\nNo missed gestures found.');
 
 const esc = (s: unknown) =>
 	String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -176,8 +263,16 @@ function chartRow(from: number) {
 		.join('');
 	const heights = frames.map((f) => f.v ?? 0);
 	const tallest = Math.max(...heights, 1);
+	const missMarks = misses
+		.filter((m) => sec(m.c.far) >= from && sec(m.c.far) < to)
+		.map(
+			(m) =>
+				`<circle cx="${x(sec(m.c.far))}" cy="26" r="6" fill="none" stroke="#f59e0b" stroke-width="2.5"><title>${esc(`Did not count: ${m.why}`)}</title></circle>`
+		)
+		.join('');
 	return `<h2>${from}–${to}s</h2><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Head movement from ${from} to ${to} seconds">
 		${marks}
+		${missMarks}
 		${line((f) => (f.v == null ? null : (f.v / tallest) * H), 'var(--pointer)', 1)}
 		${line((f) => deg(f.p - fs[0].p), '#dc2626')}
 		${line((f) => deg(f.y - fs[0].y), '#2563eb')}
@@ -199,8 +294,9 @@ svg { display: block; width: 100%; height: auto; border: 1px solid var(--pointer
 pre { white-space: pre-wrap; } .red { color: #dc2626; } .blue { color: #2563eb; } .green { color: #16a34a; } .purple { color: #9333ea; }
 </style>
 <h1>Session ${esc(basename(path))}</h1>
-<p><b class="red">Pitch</b> · <b class="blue">Yaw</b> · grey is pointer height · <b class="green">green</b> is a nod · <b class="purple">purple</b> is a shake · an orange dot was turned down · a thick red line is a marked mistake</p>
+<p><b class="red">Pitch</b> · <b class="blue">Yaw</b> · grey is pointer height · <b class="green">green</b> is a nod · <b class="purple">purple</b> is a shake · an orange dot was turned down · an orange ring looked like a gesture but did not count · a thick red line is a marked mistake</p>
 ${checks.length ? `<h2>Worth checking</h2><pre>${esc(checks.join('\n'))}</pre>` : ''}
+${missLines.length ? `<h2>Looked like a gesture but did not count</h2><pre>${esc(missLines.join('\n'))}</pre>` : ''}
 ${rowsHtml.join('\n')}
 <h2>Timeline</h2><pre>${esc(lines.join('\n'))}</pre>`;
 

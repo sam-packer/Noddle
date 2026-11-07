@@ -1,35 +1,388 @@
 {
 	"recordings": {
 		"1794034544905.json": {
-			"still": [0, 0],
-			"left-right": [0, 0],
-			"move-down-up": [0, 0],
-			"move-across": [0, 0],
-			"gentle-nod": [5, 0],
-			"gentle-shake": [0, 7],
-			"top-nod": [3, 0],
-			"side-shake": [0, 3]
+			"still": [
+				0,
+				0
+			],
+			"left-right": [
+				0,
+				0
+			],
+			"move-down-up": [
+				0,
+				0
+			],
+			"move-across": [
+				0,
+				0
+			],
+			"gentle-nod": [
+				5,
+				0
+			],
+			"gentle-shake": [
+				0,
+				7
+			],
+			"top-nod": [
+				3,
+				0
+			],
+			"side-shake": [
+				0,
+				3
+			]
 		},
 		"1794028839474.json": {
-			"still": [0, 0],
-			"left-right": [0, 0],
-			"up-down": [0, 0],
-			"nod": [3, 0],
-			"shake": [0, 3],
-			"eyes": [0, 0]
+			"still": [
+				0,
+				0
+			],
+			"left-right": [
+				0,
+				0
+			],
+			"up-down": [
+				0,
+				0
+			],
+			"nod": [
+				3,
+				0
+			],
+			"shake": [
+				0,
+				3
+			],
+			"eyes": [
+				0,
+				0
+			]
 		}
 	},
 	"sessions": {
 		"1794035989783.jsonl": {
 			"note": "Seconds from the first tracked frame. The player's own account: picked S to make GAMES, S landed in the wrong place, then going back for S hit Play.",
 			"wanted": [
-				[2.2, "spot-0"], [4.2, "spot-1"], [5.9, "spot-2"], [9.6, "spot-3"], [11.2, "spot-4"],
-				[16.1, "card-1"], [20.3, "card-7"], [24.6, "card-4"], [28.0, "pick-yellow"], [32.3, "card-6"],
-				[36.5, "card-5"], [40.6, "card-3"], [47.9, "rack-1"], [49.9, "board"], [55.5, "cell-6-7"],
-				[61.9, "rack-3"], [64.4, "board"], [69.1, "board"], [72.1, "cell-8-7"], [74.6, "rack-4"],
-				[78.0, "board"], [81.0, "cell-9-7"], [83.8, "rack-6"], [86.2, "board"], [91.4, "rack-6"]
+				[
+					2.2,
+					"spot-0"
+				],
+				[
+					4.2,
+					"spot-1"
+				],
+				[
+					5.9,
+					"spot-2"
+				],
+				[
+					9.6,
+					"spot-3"
+				],
+				[
+					11.2,
+					"spot-4"
+				],
+				[
+					16.1,
+					"card-1"
+				],
+				[
+					20.3,
+					"card-7"
+				],
+				[
+					24.6,
+					"card-4"
+				],
+				[
+					28.0,
+					"pick-yellow"
+				],
+				[
+					32.3,
+					"card-6"
+				],
+				[
+					36.5,
+					"card-5"
+				],
+				[
+					40.6,
+					"card-3"
+				],
+				[
+					47.9,
+					"rack-1"
+				],
+				[
+					49.9,
+					"board"
+				],
+				[
+					55.5,
+					"cell-6-7"
+				],
+				[
+					61.9,
+					"rack-3"
+				],
+				[
+					64.4,
+					"board"
+				],
+				[
+					69.1,
+					"board"
+				],
+				[
+					72.1,
+					"cell-8-7"
+				],
+				[
+					74.6,
+					"rack-4"
+				],
+				[
+					78.0,
+					"board"
+				],
+				[
+					81.0,
+					"cell-9-7"
+				],
+				[
+					83.8,
+					"rack-6"
+				],
+				[
+					86.2,
+					"board"
+				],
+				[
+					91.4,
+					"rack-6"
+				]
 			],
-			"shouldNotFire": [37.6, 39.6, 59.5, 75.6, 87.3, 97.9]
+			"shouldNotFire": [
+				37.6,
+				39.6,
+				59.5,
+				75.6,
+				87.3,
+				97.9
+			]
+		},
+		"1794036597190.jsonl": {
+			"note": "The BITES game. Every pick landed where the player wanted. They reported one missed nod: the nod for S over the board at about 78.6s, before the one at 80.2s that fired. If that one counts, the 80.2s nod is no longer needed.",
+			"wanted": [
+				[
+					2.5,
+					"spot-0"
+				],
+				[
+					4.4,
+					"spot-1"
+				],
+				[
+					5.9,
+					"spot-2"
+				],
+				[
+					7.9,
+					"spot-3"
+				],
+				[
+					9.5,
+					"spot-4"
+				],
+				[
+					14.8,
+					"card-1"
+				],
+				[
+					19.0,
+					"card-7"
+				],
+				[
+					25.0,
+					"card-4"
+				],
+				[
+					26.5,
+					"pick-blue"
+				],
+				[
+					30.8,
+					"card-2"
+				],
+				[
+					35.0,
+					"card-6"
+				],
+				[
+					39.4,
+					"card-3"
+				],
+				[
+					53.1,
+					"rack-2"
+				],
+				[
+					56.2,
+					"board"
+				],
+				[
+					59.0,
+					"cell-8-5"
+				],
+				[
+					61.3,
+					"rack-0"
+				],
+				[
+					63.3,
+					"board"
+				],
+				[
+					66.9,
+					"cell-9-5"
+				],
+				[
+					70.4,
+					"rack-4"
+				],
+				[
+					72.5,
+					"board"
+				],
+				[
+					75.2,
+					"cell-10-5"
+				],
+				[
+					77.0,
+					"rack-6"
+				],
+				[
+					79.5,
+					"board"
+				],
+				[
+					81.7,
+					"cell-11-5"
+				],
+				[
+					85.1,
+					"play"
+				]
+			],
+			"optional": [
+				80.2
+			],
+			"shouldNotFire": []
+		},
+		"1794036991814.jsonl": {
+			"note": "Player marked two mistakes. Both follow a sharp nod that did not count: at 4.0s on spot-1 and 16.5s on card-1. If those count, the repeat nods at 5.6s and 17.9s are no longer needed. Played BIGS correctly.",
+			"wanted": [
+				[
+					2.6,
+					"spot-0"
+				],
+				[
+					4.3,
+					"spot-1"
+				],
+				[
+					9.4,
+					"spot-2"
+				],
+				[
+					11.4,
+					"spot-3"
+				],
+				[
+					12.9,
+					"spot-4"
+				],
+				[
+					16.9,
+					"card-1"
+				],
+				[
+					21.9,
+					"card-7"
+				],
+				[
+					27.1,
+					"card-4"
+				],
+				[
+					29.8,
+					"pick-blue"
+				],
+				[
+					34.3,
+					"card-6"
+				],
+				[
+					38.6,
+					"card-2"
+				],
+				[
+					42.6,
+					"card-5"
+				],
+				[
+					60.9,
+					"rack-2"
+				],
+				[
+					62.8,
+					"board"
+				],
+				[
+					64.3,
+					"cell-8-5"
+				],
+				[
+					66.9,
+					"rack-1"
+				],
+				[
+					69.1,
+					"board"
+				],
+				[
+					70.8,
+					"cell-9-5"
+				],
+				[
+					76.5,
+					"rack-6"
+				],
+				[
+					79.5,
+					"board"
+				],
+				[
+					81.0,
+					"cell-10-5"
+				],
+				[
+					82.8,
+					"play"
+				]
+			],
+			"optional": [
+				5.6,
+				17.9
+			],
+			"shouldNotFire": [
+				61.2
+			]
 		}
 	}
 }

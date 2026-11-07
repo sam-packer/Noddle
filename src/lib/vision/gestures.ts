@@ -12,7 +12,7 @@ export type Gesture = {
 };
 
 /** A bump that had the right shape but was small or slow for this person. */
-export type RejectedBump = Gesture & { needDeg: number; needSpeed: number };
+export type RejectedBump = Gesture & { needSpeed: number };
 
 /**
  * A nod and a shake are the same movement on different axes: the head goes out and comes back.
@@ -21,21 +21,24 @@ export type RejectedBump = Gesture & { needDeg: number; needSpeed: number };
  * something is different because the head stays there.
  */
 export const gestureConfig = {
-	/** The smallest gesture that counts. It only rises from here, for someone who nods big. */
+	/** The smallest gesture that counts. One player's real nods vary threefold, so this stays low. */
 	nodDeg: 2.5,
 	shakeDeg: 2.5,
-	/** Once someone's gestures are known, this share of their usual size is the smallest that counts. */
-	personalShare: 0.5,
-	/** And this share of their usual speed. Their real nods are sharp, and aiming around isn't. */
+	/** Once someone's gestures are known, they must be this share of their usual speed. Real nods */
+	/** are sharp and aiming around isn't, even though both can be the same size. */
 	personalSpeedShare: 0.45,
+	/** The speed needed never goes above this, so a player who starts big can still nod gently. */
+	personalSpeedMax: 24,
 	/** Share of the way back the head must come for the bump to count. */
 	returnShare: 0.5,
 	/** Out and back has to fit in this long. Anything slower is looking around. */
 	maxMs: 1000,
 	/** Staying near the far end for this long means the player is looking there. */
-	holdMs: 300,
+	holdMs: 450,
+	/** A sharp nod straight after a big move only shows up when looking back this short a time. */
+	sharpMs: 900,
 	/** Movement on the other axis can only be this share of the bump, so a diagonal move isn't one. */
-	crossShare: 0.7,
+	crossShare: 1,
 	/** Nothing counts this soon after a nod, while the head returns to rest. */
 	refractoryMs: 300,
 	/**
@@ -63,8 +66,6 @@ const MOVING_SPAN_MS = 100;
  * back was the nod. Reaching for something high then nodding looks like one big bump otherwise.
  */
 const AIMING_RATIO = 1.5;
-/** A sharp nod straight after a big move only shows up when looking back this short a time. */
-const SHARP_MS = 500;
 const HISTORY_MS = 1800;
 /** Gestures to see before trusting someone's usual size, and how many to remember. */
 const PERSONAL_MIN_SEEN = 3;
@@ -79,8 +80,11 @@ function middle(values: number[]) {
 	return sorted[Math.floor(sorted.length / 2)];
 }
 
-/** Looks back from now for a movement out and back on one axis, finishing on this frame. */
-function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bump | null {
+/**
+ * Looks back from now for a movement out and back on one axis, finishing on this frame. Returns the
+ * bump, or the reason there wasn't one, so a recording can show why a gesture didn't count.
+ */
+function inspectBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bump | string {
 	const cfg = gestureConfig;
 	const other: Axis = axis === 'yaw' ? 'pitch' : 'yaw';
 	const now = buf[buf.length - 1];
@@ -91,7 +95,7 @@ function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bum
 	for (let i = first; i < buf.length; i++) {
 		if (Math.abs(buf[i][axis] - now[axis]) > Math.abs(buf[peakI][axis] - now[axis])) peakI = i;
 	}
-	if (peakI === first) return null;
+	if (peakI === first) return 'still moving away, or no movement to judge';
 	const peak = buf[peakI][axis];
 
 	// It began wherever the head was furthest from that, before getting there.
@@ -101,22 +105,23 @@ function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bum
 	}
 	const start = buf[startI];
 	const sizeDeg = Math.abs(peak - start[axis]);
-	if (sizeDeg < minDeg) return null;
-	if (Math.abs(peak - now[axis]) < cfg.returnShare * sizeDeg) return null;
+	if (sizeDeg < minDeg) return `only ${sizeDeg.toFixed(1)}° out, needs ${minDeg.toFixed(1)}°`;
+	const backDeg = Math.abs(peak - now[axis]);
+	if (backDeg < cfg.returnShare * sizeDeg) {
+		return `only ${backDeg.toFixed(1)}° back of ${sizeDeg.toFixed(1)}° out`;
+	}
 
 	// If the head was further back still, this is the middle of a long move and not a bump.
 	const before = buf.filter((s) => s.t < start.t && start.t - s.t <= BEFORE_MS).map((s) => s[axis]);
 	if (before.length) {
 		const earlier = Math.abs(middle(before) - peak);
-		if (earlier > sizeDeg * 1.25) return null;
+		if (earlier > sizeDeg * 1.25) return `part of a longer move, ${earlier.toFixed(1)}° from where it was`;
 	}
 
 	const during = buf.slice(startI);
 	const near = during.filter((s) => Math.abs(s[axis] - peak) <= 0.3 * sizeDeg);
-	if (near.length && near[near.length - 1].t - near[0].t > cfg.holdMs) return null;
-
-	const across = during.map((s) => s[other]);
-	if (Math.max(...across) - Math.min(...across) > cfg.crossShare * sizeDeg) return null;
+	const heldMs = near.length ? near[near.length - 1].t - near[0].t : 0;
+	if (heldMs > cfg.holdMs) return `stayed out ${Math.round(heldMs)}ms, limit ${cfg.holdMs}ms`;
 
 	// Which target was meant is decided by where the head was when it set off, so this has to be
 	// that moment. The furthest point can be well before it, while the player was still aiming.
@@ -127,11 +132,23 @@ function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bum
 	const outSpeed = fastest(buf, axis, startI, peakI);
 	const backSpeed = fastest(buf, axis, peakI, buf.length - 1);
 	const aiming = backSpeed >= AIMING_RATIO * outSpeed;
+
+	// Only the gesture itself counts here. Turning to reach a target just before it doesn't.
+	const across = buf.slice(aiming ? peakI : leftI).map((s) => s[other]);
+	const drift = Math.max(...across) - Math.min(...across);
+	if (drift > cfg.crossShare * sizeDeg) {
+		return `moved ${drift.toFixed(1)}° on the other axis during ${sizeDeg.toFixed(1)}°`;
+	}
 	return {
 		onset: aiming ? buf[peakI].t : buf[leftI].t,
 		sizeDeg,
 		speed: Math.max(outSpeed, backSpeed)
 	};
+}
+
+function findBump(buf: S[], axis: Axis, minDeg: number, lookBackMs: number): Bump | null {
+	const result = inspectBump(buf, axis, minDeg, lookBackMs);
+	return typeof result === 'string' ? null : result;
 }
 
 /** The fastest the head moved between two samples, in degrees a second. */
@@ -144,15 +161,9 @@ function fastest(buf: S[], axis: Axis, from: number, to: number) {
 	return top;
 }
 
-type Seen = { sizes: number[]; speeds: number[] };
-
-function remember(seen: Seen, bump: Bump) {
-	seen.sizes.push(bump.sizeDeg);
-	seen.speeds.push(bump.speed);
-	if (seen.sizes.length > PERSONAL_MAX_SEEN) {
-		seen.sizes.shift();
-		seen.speeds.shift();
-	}
+function remember(speeds: number[], bump: Bump) {
+	speeds.push(bump.speed);
+	if (speeds.length > PERSONAL_MAX_SEEN) speeds.shift();
 }
 
 /** Detects a nod or shake from one tracked face's head angles. */
@@ -162,33 +173,46 @@ export class HeadGestures {
 	private nodBlockedUntil = 0;
 	private fy = new OneEuro(4, 0.02);
 	private fp = new OneEuro(4, 0.02);
-	private nods: Seen = { sizes: [], speeds: [] };
-	private shakes: Seen = { sizes: [], speeds: [] };
+	private nodSpeeds: number[] = [];
+	private shakeSpeeds: number[] = [];
 	/** The last bump turned down for being too small or slow, for the session log. */
 	rejected: RejectedBump | null = null;
 
-	/** The smallest and slowest gesture that counts for this person. Big nodders need more. */
-	private needs(base: number, seen: Seen) {
+	/** The slowest gesture that counts for this person. */
+	private speedNeeded(seen: number[]) {
 		const cfg = gestureConfig;
-		if (seen.sizes.length < PERSONAL_MIN_SEEN) return { deg: base, speed: 0 };
-		return {
-			deg: Math.max(base, cfg.personalShare * middle(seen.sizes)),
-			speed: cfg.personalSpeedShare * middle(seen.speeds)
-		};
+		if (seen.length < PERSONAL_MIN_SEEN) return 0;
+		return Math.min(cfg.personalSpeedMax, cfg.personalSpeedShare * middle(seen));
+	}
+
+	/** For analysis: what the detector makes of this axis right now, and why. */
+	inspect(kind: Gesture['kind'], t: number) {
+		const nod = kind === 'nod';
+		const cfg = gestureConfig;
+		if (this.buf.length < 4) return 'just after a gesture, still collecting';
+		if (t < this.blockedUntil || (nod && t < this.nodBlockedUntil)) {
+			const until = nod ? Math.max(this.blockedUntil, this.nodBlockedUntil) : this.blockedUntil;
+			return `cooldown, ${Math.round(until - t)}ms left`;
+		}
+		const axis = nod ? 'pitch' : 'yaw';
+		const base = nod ? cfg.nodDeg : cfg.shakeDeg;
+		const long = inspectBump(this.buf, axis, base, cfg.maxMs);
+		if (typeof long !== 'string') return null;
+		const short = inspectBump(this.buf, axis, base, cfg.sharpMs);
+		return typeof short === 'string' ? `${long} / short look: ${short}` : null;
 	}
 
 	/** Looks for this axis's gesture, checking it against what this person usually does. */
-	private check(kind: Gesture['kind'], axis: Axis, base: number, seen: Seen, t: number) {
-		const need = this.needs(base, seen);
-		const found =
-			findBump(this.buf, axis, base, gestureConfig.maxMs) ??
-			findBump(this.buf, axis, base, SHARP_MS);
-		if (!found) return null;
-		if (found.sizeDeg < need.deg || found.speed < need.speed) {
-			this.rejected = { kind, t, ...found, needDeg: need.deg, needSpeed: need.speed };
-			return null;
-		}
-		return found;
+	private check(kind: Gesture['kind'], axis: Axis, base: number, seen: number[], t: number) {
+		const needSpeed = this.speedNeeded(seen);
+		const looks = [
+			findBump(this.buf, axis, base, gestureConfig.maxMs),
+			findBump(this.buf, axis, base, gestureConfig.sharpMs)
+		].filter((b) => b !== null);
+		const good = looks.find((b) => b.speed >= needSpeed);
+		if (good) return good;
+		if (looks.length) this.rejected = { kind, t, ...looks[0], needSpeed };
+		return null;
 	}
 
 	/** How far the head has pitched from where it was resting, in degrees. */
@@ -225,11 +249,11 @@ export class HeadGestures {
 
 		const cfg = gestureConfig;
 		const nod =
-			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nods, t);
-		const shake = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakes, t);
+			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nodSpeeds, t);
+		const shake = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
 		const found = nod ?? shake;
 		if (!found) return null;
-		remember(shake ? this.shakes : this.nods, found);
+		remember(shake ? this.shakeSpeeds : this.nodSpeeds, found);
 
 		this.blockedUntil = t + (shake ? cfg.shakeRefractoryMs : cfg.refractoryMs);
 		this.nodBlockedUntil = t + (shake ? cfg.shakeRefractoryMs : cfg.nodRefractoryMs);
