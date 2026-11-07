@@ -36,6 +36,9 @@ export type LobbyState = {
 const OPEN = 1;
 const FIRST_RETRY_MS = 500;
 const MAX_RETRY_MS = 10000;
+/** A socket can look open long after the network has gone, so a move must be answered by this. */
+const ANSWER_MS = 5000;
+const LOST_MOVE = 'The connection dropped, so that move was lost. Try it again.';
 /** The room has refused, closed or moved this seat, so reconnecting can't help. */
 const FINAL_CLOSE_CODES = new Map<number, string>([
 	[4001, 'This seat was opened somewhere else.'],
@@ -90,6 +93,8 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 	private closed = false;
 	private attempts = 0;
 	private seq = 0;
+	/** The move still waiting for an answer from the server. */
+	private awaiting: number | null = null;
 	private view: RemoteView | null = null;
 	private code: string;
 	private name: string;
@@ -169,6 +174,7 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 
 	private async lost(code: number) {
 		if (this.closed || this.lobby.value.error) return;
+		this.failAwaitedMove();
 		const final = FINAL_CLOSE_CODES.get(code);
 		if (final) {
 			this.lobby.set({ error: final, status: 'offline' });
@@ -181,7 +187,23 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		if (!this.closed) this.connect();
 	}
 
+	/** Reports a move that will never be answered, so the screen stops waiting for it. */
+	private failAwaitedMove() {
+		if (this.awaiting === null) return;
+		this.awaiting = null;
+		this.store.reject(LOST_MOVE);
+	}
+
+	/** Nothing came back, so this connection is dead whatever it says. Replace it. */
+	private replaceSocket() {
+		const dead = this.socket;
+		this.socket = null;
+		dead?.close();
+		void this.lost(1006);
+	}
+
 	private receive(message: Record<string, unknown>) {
+		if (message.type === 'state' || message.type === 'rejected') this.awaiting = null;
 		switch (message.type) {
 			case 'joined':
 				this.attempts = 0;
@@ -250,8 +272,12 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 			this.store.reject('Not connected. Trying to get back in.');
 			return;
 		}
-		this.seq++;
-		this.socket.send(JSON.stringify({ type: 'action', action, seq: this.seq }));
+		const seq = ++this.seq;
+		this.awaiting = seq;
+		this.socket.send(JSON.stringify({ type: 'action', action, seq }));
+		void this.wait(ANSWER_MS).then(() => {
+			if (this.awaiting === seq && !this.closed) this.replaceSocket();
+		});
 	}
 
 	/** Starts the game from the lobby, or another one after it ends. */

@@ -26,7 +26,8 @@ export interface Env {
 
 const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 5;
-const CODE_PATTERN = new RegExp(`^[${CODE_LETTERS}]{${CODE_LENGTH}}$`);
+/** Looser than the codes we issue, so a typo reaches the room and hears that it doesn't exist. */
+const CODE_PATTERN = /^[A-Z0-9]{1,16}$/;
 const CREATE_ATTEMPTS = 5;
 /** A room is deleted after this long with nothing happening. */
 const IDLE_MS = 2 * 60 * 60 * 1000;

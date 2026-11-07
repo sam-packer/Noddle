@@ -13,6 +13,7 @@
 	import Uno from '../lib/stages/Uno.svelte';
 	import { session } from '../lib/session';
 	import { createDemoScrabble, createDemoUno, createLocalScrabble, createLocalUno } from '../lib/session/browser';
+	import { hasSeatToken } from '../lib/session/remote';
 	import type { GameSession } from '../lib/session/types';
 	import type { UnoAction, UnoView } from '../lib/games/uno/engine';
 	import type { ScrabbleAction, ScrabbleView } from '../lib/games/scrabble/engine';
@@ -71,7 +72,20 @@
 	/** Which gesture confirms. The other one goes back, so the two can be compared. */
 	let confirmWith = $state<'nod' | 'shake'>('nod');
 
+	/** Someone already seated in this room is mid game, and others are waiting on them. */
+	function returningToRoom() {
+		try {
+			return !!roomLink && hasSeatToken(localStorage, roomLink);
+		} catch {
+			return false;
+		}
+	}
+
 	function next() {
+		if (stage === 'gate' && returningToRoom()) {
+			stage = 'room';
+			return;
+		}
 		if (stage === 'instructions' && afterInstructions) {
 			stage = afterInstructions;
 			return;
@@ -152,7 +166,7 @@
 			else targets.cancel();
 		};
 		engine.onLocked = () => {
-			if (stage === 'gate') stage = 'instructions';
+			if (stage === 'gate') next();
 		};
 		engine.start();
 		return smoothPointer.start();
@@ -224,7 +238,8 @@
 				handoff();
 				break;
 			case 'r':
-				location.reload();
+				// Back to the demo from anywhere, even if a room or the menu changed the address.
+				location.assign('/');
 				break;
 			case 'f':
 				if (document.fullscreenElement) document.exitFullscreen();

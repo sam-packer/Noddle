@@ -30,6 +30,7 @@
 	const CENTRE = 7;
 	/** A stray nod just after the game ends must not choose what happens next. */
 	const END_BUTTONS_DELAY_MS = 1500;
+	const PLAY_HOLD_MS = 1500;
 	/** The two-step picker for a blank: a group of letters, then the letter. */
 	const LETTER_GROUPS = ['ABCDE', 'FGHIJ', 'KLMNO', 'PQRST', 'UVWXYZ'];
 
@@ -55,6 +56,8 @@
 	let boardEl = $state<HTMLElement>();
 	let leaving = $state(false);
 	let endButtons = $state(false);
+	/** Just after backing out, when Play has appeared under the pointer and must not take a nod. */
+	let playHeld = $state(false);
 	/** Sent and waiting for an answer, so a second nod can't send the same play twice. */
 	let submitted = $state(false);
 	/** Squares from the last move, so a new word stands out for a moment. */
@@ -68,11 +71,12 @@
 	const heldLetter = $derived(heldTile ? (heldTile.letter === '?' ? blankLetter : heldTile.letter) : null);
 	const myTurn = $derived(view.can.place && !submitted && !leaving);
 	const boardEmpty = $derived(Object.keys(committed).length === 0);
+	const canPlay = $derived(stage === 'idle' && pending.length > 0 && myTurn && !playHeld);
 
 	// A shake only ever undoes the last tile placed. Closing things is the job of the close button,
 	// so a head drifting while the player thinks can't lose them anything but a tile.
 	const releaseCancel = targets.claimCancel(() => {
-		if (stage !== 'idle' || !pending.length) return;
+		if (stage !== 'idle' || !pending.length || submitted) return;
 		message = '';
 		pending = pending.slice(0, -1);
 	});
@@ -91,7 +95,6 @@
 		untrack(() => {
 			if (pending.some((p) => !ids.has(p.tileId))) {
 				pending = pending.filter((p) => ids.has(p.tileId));
-				submitted = false;
 			}
 		});
 	});
@@ -105,7 +108,7 @@
 			const rejected = snap.rejected!;
 			log.event('rejected', { reason: rejected.reason });
 			submitted = false;
-			const hint = /connect to the board|centre/.test(rejected.reason)
+			const hint = /connect to the board|centre|connection|not connected/i.test(rejected.reason)
 				? ''
 				: rejected.reason.includes('dictionary')
 					? ' Shake to take a tile back.'
@@ -133,6 +136,8 @@
 		const key = lastKey;
 		untrack(() => {
 			if (key !== loggedKey && view.last) {
+				// However it ended, the move in flight has been answered.
+				submitted = false;
 				if (view.last.kind === 'place') {
 					log.event('played', { word: view.last.word, gained: view.last.score, seat: view.last.seat });
 				} else {
@@ -176,8 +181,15 @@
 		} else if (stage === 'held') {
 			stage = 'idle';
 			clearHold();
+			playHeld = pending.length > 0;
 		}
 	}
+
+	$effect(() => {
+		if (!playHeld) return;
+		const timer = setTimeout(() => (playHeld = false), PLAY_HOLD_MS);
+		return () => clearTimeout(timer);
+	});
 
 	/**
 	 * Squares that couldn't be part of a play are dimmed as a guide. They can still be chosen, so
@@ -337,7 +349,7 @@
 	);
 
 	const headline = $derived.by(() => {
-		if (snap.ended) return snap.ended.text;
+		if (snap.ended) return fullGame ? `${snap.ended.title} ${snap.ended.text}` : snap.ended.text;
 		if (message) return message;
 		if (fullGame && snap.note && stage === 'idle' && !pending.length) return `${snap.note}. ${prompt}`;
 		return prompt;
@@ -576,9 +588,9 @@
 				</button>
 			{:else}
 				<button
-					use:target={{ id: 'play', legal: stage === 'idle' && pending.length > 0 && myTurn, confirm: playWord }}
+					use:target={{ id: 'play', legal: canPlay, confirm: playWord }}
 					class="action play bg-emerald-700"
-					class:off={!(stage === 'idle' && pending.length > 0 && myTurn)}
+					class:off={!canPlay}
 					class:focused={targets.focused === 'play'}
 				>
 					Play

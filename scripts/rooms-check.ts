@@ -212,11 +212,33 @@ async function missing() {
 	await ghost.until('refusal', () => ghost.inbox.some((m) => m.type === 'error'));
 	await ghost.until('closed', () => ghost.closeCode !== null);
 	check('an unknown code is refused cleanly', ghost.closeCode === 4404);
+	const typo = new Client('IIIII', 'Lost');
+	await typo.connect();
+	await typo.until('refusal for a typo', () => typo.closeCode !== null);
+	check("a code with letters we never issue says it doesn't exist", typo.closeCode === 4404);
 	const bad = await fetch(`${BASE}/rooms`, { method: 'POST', body: JSON.stringify({ game: 'chess' }) });
 	check('an unknown game is refused', bad.status === 400);
 }
 
+/** Rooms sleep after about 10 idle seconds, and sockets must still be told apart after waking. */
+async function hibernation() {
+	console.log('After the room has gone to sleep');
+	const code = await newRoom('scrabble');
+	const a = new Client(code, 'Ann');
+	const b = new Client(code, 'Bo');
+	await a.connect();
+	await a.until('a joined', () => !!a.token);
+	await b.connect();
+	await a.until('both seated', () => a.presence?.seats.length === 2);
+	await Bun.sleep(15000);
+	b.socket.close();
+	await a.until('the seat to free up', () => a.presence.seats.length === 1, 5000);
+	check('closing a tab still frees its lobby seat', a.presence.seats[0].name === 'Ann');
+	a.socket.close();
+}
+
 await missing();
+await hibernation();
 await scrabble();
 await uno();
 console.log(`\nAll ${passed} checks passed.`);

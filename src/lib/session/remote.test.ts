@@ -243,6 +243,55 @@ describe('losing the connection', () => {
 		session.close();
 	});
 
+	const playing = () => {
+		const t = setup();
+		t.socket().open();
+		t.socket().receive({ type: 'presence', game: 'uno', phase: 'playing', host: 0, seats, you: 0 });
+		t.socket().receive({ type: 'state', view: unoView(newUno({ players: 2, seed: 1 }), 0), seq: 1 });
+		return t;
+	};
+	const rejections = (session: RemoteSession) => {
+		let n = 0;
+		session.subscribe((s) => (n = s.rejected?.n ?? 0))();
+		return n;
+	};
+
+	test('a move lost when the connection drops is reported, so the screen can recover', () => {
+		const { socket, session } = playing();
+		session.send({ type: 'draw' });
+		expect(rejections(session)).toBe(0);
+		socket().drop();
+		expect(rejections(session)).toBe(1);
+		session.close();
+	});
+
+	test('a move nobody answers is reported, and the connection is replaced', async () => {
+		const { socket, session, waits } = playing();
+		const dead = socket();
+		session.send({ type: 'draw' });
+		expect(waits.length).toBe(1);
+		waits.shift()!.go();
+		await tick();
+		expect(rejections(session)).toBe(1);
+		expect(session.lobby.value.status).toBe('offline');
+		await tick();
+		waits.shift()!.go();
+		await tick();
+		expect(socket()).not.toBe(dead);
+		session.close();
+	});
+
+	test('a move that gets an answer is not reported, however long it took', async () => {
+		const { socket, session, waits } = playing();
+		session.send({ type: 'draw' });
+		socket().receive({ type: 'state', view: unoView(newUno({ players: 2, seed: 2 }), 0), seq: 2 });
+		waits.shift()!.go();
+		await tick();
+		expect(rejections(session)).toBe(0);
+		expect(session.lobby.value.status).toBe('live');
+		session.close();
+	});
+
 	test('an address the browser refuses to open is reported, not a crash', () => {
 		const session = new RemoteSession({
 			baseUrl: '',

@@ -3,7 +3,7 @@
 
 	/**
 	 * The way out of a game. Leaving is never one nod away: the button only asks, and the safe answer
-	 * sits where a second nod would land.
+	 * is the one nearer that button, so a head drifting down from it reaches Keep playing first.
 	 */
 	let {
 		show,
@@ -96,11 +96,11 @@
 		transition: transform 90ms ease-out;
 	}
 	.stay {
-		left: 12%;
+		right: 12%;
 		background: #15803d;
 	}
 	.go {
-		right: 12%;
+		left: 12%;
 		background: #b91c1c;
 	}
 	.focused {

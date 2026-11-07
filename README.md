@@ -25,7 +25,7 @@ To deploy, first create the database, then put its id in `workers/rooms/wrangler
 bunx wrangler d1 create noddle
 bunx wrangler d1 migrations apply noddle --remote --config workers/rooms/wrangler.jsonc
 bun run deploy:rooms
-PUBLIC_ROOMS_URL=https://<your rooms worker> bun run build
+PUBLIC_ROOMS_URL=https://<your rooms worker> bunx vite build
 bunx wrangler deploy
 ```
 
