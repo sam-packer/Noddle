@@ -115,6 +115,11 @@ function score(say: (line: string) => void) {
 			const i = fired.findIndex((n, j) => !used.has(j) && Math.abs(n.s - s) <= MATCH_S);
 			if (i >= 0) used.add(i);
 		}
+		for (const s of (want.shouldShake ?? []) as number[]) {
+			const shook = shakes.some((t) => Math.abs(t - s) <= MATCH_S);
+			if (!shook) problems++;
+			say(`  ${shook ? 'ok   ' : 'MISS '} ${s.toFixed(1).padStart(5)}s should shake`);
+		}
 		for (const s of (want.shouldNotShake ?? []) as number[]) {
 			const shook = shakes.some((t) => Math.abs(t - s) <= MATCH_S);
 			if (shook) problems++;

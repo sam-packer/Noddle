@@ -564,6 +564,140 @@
 				52.9,
 				73.3
 			],
+			"shouldNotFire": [],
+			"shouldShake": [
+				85.1,
+				111.1,
+				113.8
+			]
+		},
+		"1794040253677.jsonl": {
+			"note": "Clean SEMILOG. The player confirmed the shake at 51.0s was false: it kicked them out of the zoom while holding E. The picks at 49.7s and 59.0s were right in the game but can't be scored here: the pointer was just outside the target, and the game used what was highlighted, which replay doesn't have.",
+			"wanted": [
+				[
+					1.6,
+					"spot-0"
+				],
+				[
+					3.5,
+					"spot-1"
+				],
+				[
+					5.3,
+					"spot-2"
+				],
+				[
+					7.1,
+					"spot-3"
+				],
+				[
+					8.6,
+					"spot-4"
+				],
+				[
+					12.4,
+					"card-1"
+				],
+				[
+					16.3,
+					"card-7"
+				],
+				[
+					20.5,
+					"card-4"
+				],
+				[
+					22.0,
+					"pick-green"
+				],
+				[
+					26.0,
+					"card-2"
+				],
+				[
+					29.9,
+					"card-6"
+				],
+				[
+					34.1,
+					"card-5"
+				],
+				[
+					43.8,
+					"rack-6"
+				],
+				[
+					45.9,
+					"board"
+				],
+				[
+					48.0,
+					"cell-2-6"
+				],
+				[
+					53.1,
+					"board"
+				],
+				[
+					54.6,
+					"cell-3-6"
+				],
+				[
+					56.5,
+					"rack-3"
+				],
+				[
+					61.6,
+					"rack-2"
+				],
+				[
+					64.3,
+					"cell-5-6"
+				],
+				[
+					66.3,
+					"rack-5"
+				],
+				[
+					69.3,
+					"cell-6-6"
+				],
+				[
+					72.0,
+					"rack-1"
+				],
+				[
+					74.0,
+					"cell-8-6"
+				],
+				[
+					75.5,
+					"play"
+				]
+			],
+			"optional": [
+				53.1,
+				49.7,
+				59.0
+			],
+			"shouldNotShake": [
+				51.0
+			],
+			"shouldShake": [
+				10.3
+			],
+			"shouldNotFire": []
+		},
+		"1794038347916.jsonl": {
+			"note": "Only the shakes are labelled. The player reported the turn at 26.6s cancelled their Wild. The shake at 71.6s undid a misplaced E, on purpose.",
+			"wanted": [],
+			"optional": [],
+			"shouldNotShake": [
+				26.6
+			],
+			"shouldShake": [
+				71.6
+			],
 			"shouldNotFire": []
 		}
 	}
