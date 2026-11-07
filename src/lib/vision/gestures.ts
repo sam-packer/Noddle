@@ -46,11 +46,9 @@ export const gestureConfig = {
 	 * shake to undo a mistake must still work straight away. Played nods were at least 2s apart.
 	 */
 	nodRefractoryMs: 1500,
-	/** A shake undoes something, so a slow turn doesn't count. Played false ones reach 17°/s. */
-	shakeMinSpeed: 20,
-	/** Just after a nod the player is usually turning to the next thing, so a shake must be quicker. */
-	shakeAfterNodSpeed: 40,
-	shakeAfterNodMs: 2500,
+	/** A shake undoes something, so it must be quick. Heads drifting while aiming or thinking */
+	/** reached 31°/s in played games, and deliberate undos were almost all well above that. */
+	shakeMinSpeed: 35,
 	/** A sharp dip counts even if the head doesn't come all the way back, because it stops there. */
 	sharpDipDeg: 3.5,
 	sharpDipSpeed: 35,
@@ -222,7 +220,6 @@ export class HeadGestures {
 	private buf: S[] = [];
 	private blockedUntil = 0;
 	private nodBlockedUntil = 0;
-	private lastNodT = -Infinity;
 	private fy = new OneEuro(4, 0.02);
 	private fp = new OneEuro(4, 0.02);
 	private nodSpeeds: number[] = [];
@@ -304,12 +301,9 @@ export class HeadGestures {
 		const nod =
 			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nodSpeeds, t);
 		const quick = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
-		const afterNod = t - this.lastNodT < cfg.shakeAfterNodMs;
-		const shakeSpeed = afterNod ? cfg.shakeAfterNodSpeed : cfg.shakeMinSpeed;
-		const shake = quick && quick.speed >= shakeSpeed ? quick : null;
+		const shake = quick && quick.speed >= cfg.shakeMinSpeed ? quick : null;
 		const found = nod ?? shake;
 		if (!found) return null;
-		if (nod) this.lastNodT = t;
 		remember(shake ? this.shakeSpeeds : this.nodSpeeds, found);
 
 		this.blockedUntil = t + (shake ? cfg.shakeRefractoryMs : cfg.refractoryMs);

@@ -699,6 +699,135 @@
 				71.6
 			],
 			"shouldNotFire": []
+		},
+		"1794040593425.jsonl": {
+			"note": "SEMILOG again. The player reported S misplaced at 52.5s: the head drifted 4px into the next square just before the nod. They also reported the Wild colour dialog closing while thinking: a 3 degree wobble at 24.1s counted as a shake. The shake at 53.6s undid the S on purpose.",
+			"wanted": [
+				[
+					1.5,
+					"spot-0"
+				],
+				[
+					3.4,
+					"spot-1"
+				],
+				[
+					5.0,
+					"spot-2"
+				],
+				[
+					6.5,
+					"spot-3"
+				],
+				[
+					8.0,
+					"spot-4"
+				],
+				[
+					12.5,
+					"card-7"
+				],
+				[
+					17.0,
+					"card-1"
+				],
+				[
+					21.2,
+					"card-4"
+				],
+				[
+					26.1,
+					"card-4"
+				],
+				[
+					27.6,
+					"pick-red"
+				],
+				[
+					31.8,
+					"card-6"
+				],
+				[
+					35.9,
+					"card-2"
+				],
+				[
+					40.1,
+					"card-5"
+				],
+				[
+					48.6,
+					"rack-6"
+				],
+				[
+					50.8,
+					"board"
+				],
+				[
+					55.3,
+					"rack-6"
+				],
+				[
+					57.7,
+					"board"
+				],
+				[
+					60.4,
+					"cell-2-6"
+				],
+				[
+					62.2,
+					"rack-4"
+				],
+				[
+					66.5,
+					"cell-3-6"
+				],
+				[
+					70.2,
+					"cell-4-6"
+				],
+				[
+					71.8,
+					"rack-2"
+				],
+				[
+					75.2,
+					"cell-5-6"
+				],
+				[
+					76.9,
+					"rack-5"
+				],
+				[
+					79.1,
+					"cell-6-6"
+				],
+				[
+					81.4,
+					"rack-1"
+				],
+				[
+					84.3,
+					"cell-8-6"
+				],
+				[
+					85.8,
+					"play"
+				]
+			],
+			"optional": [
+				52.5,
+				68.0
+			],
+			"shouldNotShake": [
+				24.1
+			],
+			"shouldShake": [
+				10.1,
+				53.6
+			],
+			"shouldNotFire": []
 		}
 	}
 }

@@ -22,6 +22,11 @@ const SWITCH_RATIO = 1.3;
 /** It must stay nearer this long, so a shaky pointer doesn't flicker between two targets. */
 const SWITCH_MS = 100;
 const EXACT_RELEASE_PX = 30;
+/**
+ * Squares touch, and a head drifts a little as a nod begins, so the pointer must be this far into
+ * the next square before it takes over. Otherwise the tile lands one square off.
+ */
+const EXACT_SWITCH_PX = 24;
 const HOLD_NO_GAZE_MS = 1000;
 /** The pointer only leans toward targets up to this wide. */
 const MAGNET_MAX_WIDTH_PX = 320;
@@ -103,7 +108,13 @@ class Targets {
 		if (!p) return undefined;
 		return this.legalEntries().find((e) => {
 			const r = e.el.getBoundingClientRect();
-			return p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+			const inset = e.def.exact ? EXACT_SWITCH_PX : 0;
+			return (
+				p.x >= r.left + inset &&
+				p.x <= r.right - inset &&
+				p.y >= r.top + inset &&
+				p.y <= r.bottom - inset
+			);
 		});
 	}
 
@@ -139,6 +150,7 @@ class Targets {
 		let best: string | null = null;
 		let bestD = Infinity;
 		let currentD = Infinity;
+		let staysOnSquare = false;
 		for (const e of this.legalEntries()) {
 			const rect = e.el.getBoundingClientRect();
 			const gap = rectGap(rect, p);
@@ -146,12 +158,17 @@ class Targets {
 			const { select, keep } = this.reach(e);
 			if (e.def.id === this.focused) {
 				currentD = d;
+				staysOnSquare = !!e.def.exact && gap < EXACT_SWITCH_PX;
 				if (gap > keep) this.setFocus(null);
 			}
 			if (gap <= select && d < bestD) {
 				bestD = d;
 				best = e.def.id;
 			}
+		}
+		if (staysOnSquare && this.focused) {
+			this.pendingSwitch = null;
+			return;
 		}
 		if (!best || !this.focused || best === this.focused || bestD * SWITCH_RATIO >= currentD) {
 			this.pendingSwitch = null;

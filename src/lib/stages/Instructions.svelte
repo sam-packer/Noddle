@@ -25,7 +25,7 @@
 	<div class="absolute top-[8%] left-1/2 w-3/5 -translate-x-1/2 text-center">
 		{#if finished}
 			<p class="text-5xl font-bold">Shake your head to go back</p>
-			<p class="mt-3 text-2xl text-slate-300">A small shake is plenty: to the side and back. Then let's play</p>
+			<p class="mt-3 text-2xl text-slate-300">Make it a quick one: to the side and back. Then let's play</p>
 		{:else}
 			<p class="text-5xl font-bold">Point your head at the glowing card, then nod</p>
 			<p class="mt-3 text-2xl text-slate-300">
