@@ -28,3 +28,6 @@ vite.config.ts.timestamp-*
 # Local editor and agent settings
 .idea
 .claude/settings.local.json
+
+# Local notes, plans and test images
+/docs
