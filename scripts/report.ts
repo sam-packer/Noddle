@@ -60,6 +60,7 @@ const checks: string[] = [];
 const lines: string[] = [];
 const counts = { nods: 0, shakes: 0, picks: 0, missed: 0, rejected: 0, mistakes: 0 };
 let lastNod: number | null = null;
+let lastRejected: number | null = null;
 let lastGame = '';
 
 for (const e of events) {
@@ -104,6 +105,12 @@ for (const e of events) {
 			break;
 		}
 		case 'rejected':
+			// One movement can be turned down on several frames in a row. Report it once.
+			if (lastRejected !== null && e.t - lastRejected < 500) {
+				lastRejected = e.t;
+				break;
+			}
+			lastRejected = e.t;
 			counts.rejected++;
 			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° ${Math.round(e.speed)}°/s, needed ${e.needDeg.toFixed(1)}° ${Math.round(e.needSpeed)}°/s`);
 			break;

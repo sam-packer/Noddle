@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
+	import { smoothPointer } from '../input/smoothPointer.svelte';
 	import { target, targets, type ConfirmContext } from '../input/targets.svelte';
 	import { session } from '../session';
 	import { engine } from '../vision/engine.svelte';
@@ -361,10 +362,11 @@
 
 </div>
 
-{#if heldLetter && engine.pointer && stage === 'held'}
+{#if heldLetter && smoothPointer.visible && (stage === 'held' || stage === 'zoom')}
 	<div
 		class="carried"
-		style:transform="translate({engine.pointer.x}px, {engine.pointer.y}px) translate(-50%, -120%)"
+		class:landing={targets.focused?.startsWith('cell-')}
+		style:transform="translate({smoothPointer.x}px, {smoothPointer.y}px) translate(-50%, -120%)"
 	>
 		{heldLetter}<sub>{VALUES[heldLetter]}</sub>
 	</div>
@@ -532,6 +534,10 @@
 		font-weight: 800;
 		box-shadow: 0 10px 22px rgb(0 0 0 / 0.5);
 		pointer-events: none;
-		transition: transform 70ms linear;
+		transition: opacity 120ms;
+	}
+	/* The square shows where it will land, so the carried tile steps back but never vanishes. */
+	.carried.landing {
+		opacity: 0.35;
 	}
 </style>

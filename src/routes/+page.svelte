@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { smoothPointer } from '../lib/input/smoothPointer.svelte';
 	import { targets } from '../lib/input/targets.svelte';
 	import AccuracyTest from '../lib/stages/AccuracyTest.svelte';
 	import Collector from '../lib/stages/Collector.svelte';
@@ -26,15 +27,6 @@
 	let markTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Which gesture confirms. The other one goes back, so the two can be compared. */
 	let confirmWith = $state<'nod' | 'shake'>('nod');
-
-	/** The pointer leans toward what it has selected, so aim and selection read as one thing. */
-	const MAGNET = 0.35;
-	const shownPointer = $derived.by(() => {
-		const p = engine.pointer;
-		const c = targets.focusCentre;
-		if (!p || !c) return p;
-		return { x: p.x + (c.x - p.x) * MAGNET, y: p.y + (c.y - p.y) * MAGNET };
-	});
 
 	function next() {
 		const i = ORDER.indexOf(stage);
@@ -75,6 +67,7 @@
 			if (stage === 'gate') stage = 'instructions';
 		};
 		engine.start();
+		return smoothPointer.start();
 	});
 
 	function onKeydown(e: KeyboardEvent) {
@@ -188,10 +181,10 @@
 	{/if}
 </main>
 
-{#if shownPointer}
+{#if smoothPointer.visible}
 	<div
 		class="pointer"
-		style:transform="translate({shownPointer.x}px, {shownPointer.y}px) translate(-50%, -50%)"
+		style:transform="translate({smoothPointer.x}px, {smoothPointer.y}px) translate(-50%, -50%)"
 	></div>
 {/if}
 
@@ -231,6 +224,5 @@
 		background: rgb(250 204 21 / 0.55);
 		box-shadow: 0 0 0 2px rgb(255 255 255 / 0.5);
 		pointer-events: none;
-		transition: transform 70ms linear;
 	}
 </style>
