@@ -30,7 +30,7 @@
 
 {#if show && !leaving}
 	<button
-		use:target={{ id: 'leave', legal: true, confirm: () => (leaving = true) }}
+		use:target={{ id: 'leave', legal: true, deliberate: true, confirm: () => (leaving = true) }}
 		class="leave"
 		class:bottom
 		class:focused={targets.focused === 'leave'}

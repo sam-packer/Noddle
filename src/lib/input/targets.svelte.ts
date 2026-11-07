@@ -12,6 +12,8 @@ export type TargetDef = {
 	calib?: boolean;
 	/** Packed edge to edge, like board squares, so only the one under the pointer can be selected. */
 	exact?: boolean;
+	/** Costly to hit by accident, so the pointer must really go there and already be there as the nod starts. */
+	deliberate?: boolean;
 	confirm: (ctx: ConfirmContext) => void;
 };
 
@@ -22,6 +24,8 @@ const SWITCH_RATIO = 1.3;
 /** It must stay nearer this long, so a shaky pointer doesn't flicker between two targets. */
 const SWITCH_MS = 100;
 const EXACT_RELEASE_PX = 30;
+/** The pointer stops at the screen's edge, so this is just enough to reach a corner button from there. */
+const DELIBERATE_SELECT_PX = 45;
 /**
  * Squares touch, and a head drifts a little as a nod begins, so the pointer must be this far into
  * the next square before it takes over. Otherwise the tile lands one square off.
@@ -132,9 +136,9 @@ class Targets {
 
 		/** How far outside a target the pointer can be and still select it, then keep it selected. */
 	private reach(e: Entry) {
-		return e.def.exact
-			? { select: 0, keep: EXACT_RELEASE_PX }
-			: { select: hitbox.padPx, keep: hitbox.releasePx };
+		if (e.def.exact) return { select: 0, keep: EXACT_RELEASE_PX };
+		if (e.def.deliberate) return { select: DELIBERATE_SELECT_PX, keep: hitbox.releasePx };
+		return { select: hitbox.padPx, keep: hitbox.releasePx };
 	}
 
 	/**
@@ -225,6 +229,7 @@ class Targets {
 		if (under) entry = under;
 		const arrived = this.arrivedAt(entry, onset);
 		if (arrived) entry = arrived;
+		if (entry?.def.deliberate && entry.def.id !== id && entry !== under) entry = undefined;
 		const point = engine.pointAt(onset);
 		session.event('confirm', {
 			chose: entry?.def.legal ? entry.def.id : null,
