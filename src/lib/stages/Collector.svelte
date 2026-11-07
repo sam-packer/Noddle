@@ -3,6 +3,7 @@
 	import { targets } from '../input/targets.svelte';
 	import { engine, setup, type DataFrame } from '../vision/engine.svelte';
 	import { faceBox } from '../vision/math';
+	import ToolLeave, { toolInput } from './ToolLeave.svelte';
 
 	let { onClose }: { onClose: () => void } = $props();
 
@@ -53,6 +54,10 @@
 	let skipped = $state(0);
 	let lost = $state(0);
 	let remaining = $state(BLOCK_SECONDS);
+	/** Stopped part way through a part, which carries on from there. */
+	let paused = $state(false);
+	/** Fullscreen this tool asked for, so it hands it back when it closes. */
+	let wentFullscreen = false;
 
 	let dotStart = 0;
 	let lastFrame = 0;
@@ -206,7 +211,8 @@
 		const block = blocks[blockIndex];
 		labels.push({ event: 'block-start', block: block.id, t: performance.now(), eyeDistanceCm });
 		phase = 'running';
-		remaining = BLOCK_SECONDS;
+		if (!paused) remaining = BLOCK_SECONDS;
+		paused = false;
 		bag = [];
 		nextDot();
 		dotTimer = setInterval(nextDot, block.dotMs);
@@ -225,6 +231,7 @@
 		stopTimers();
 		labels.push({ event: 'block-paused', block: blocks[blockIndex].id, t: performance.now() });
 		flushLabels();
+		paused = true;
 		phase = 'intro';
 	}
 
@@ -242,17 +249,20 @@
 		if (!fullscreen && phase === 'running') pauseBlock();
 	}
 
+	/** Browsers only allow fullscreen from a key or a click, so running this tool takes hands. */
+	function goFullscreen() {
+		wentFullscreen = true;
+		document.documentElement.requestFullscreen().catch(() => {
+			wentFullscreen = false;
+			formError = 'Could not go fullscreen. Recording needs fullscreen.';
+		});
+	}
+
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter') {
-			if (!fullscreen) {
-				document.documentElement.requestFullscreen().catch(() => {
-					formError = 'Could not go fullscreen. Recording needs fullscreen.';
-				});
-			} else if (!measured) {
-				confirmMeasurements();
-			} else if (phase === 'intro') {
-				startBlock();
-			}
+			if (!fullscreen) goFullscreen();
+			else if (!measured) confirmMeasurements();
+			else if (phase === 'intro') startBlock();
 		} else if (e.key === ' ' && phase === 'running') {
 			// The player couldn't find the dot, so this one shouldn't be trusted.
 			e.preventDefault();
@@ -267,6 +277,9 @@
 	onMount(() => {
 		targets.enabled = false;
 		engine.dataTap = onFrame;
+		toolInput.shake = () => {
+			if (phase === 'running') pauseBlock();
+		};
 		labelTimer = setInterval(flushLabels, 1000);
 	});
 
@@ -275,7 +288,9 @@
 		clearInterval(labelTimer);
 		flushLabels();
 		engine.dataTap = null;
+		toolInput.shake = null;
 		targets.enabled = true;
+		if (wentFullscreen && document.fullscreenElement) document.exitFullscreen();
 	});
 
 	const minutes = $derived(`${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`);
@@ -284,16 +299,21 @@
 <svelte:window onkeydown={onKeydown} />
 <svelte:document onfullscreenchange={onFullscreenChange} />
 
-<div class="fixed inset-0 z-[70] bg-black text-white">
+<!-- Above the pointer during a run, so it can't pull the eyes away from the dot. -->
+<div class={['fixed inset-0 bg-black text-white', phase === 'running' ? 'z-[70]' : 'z-40']}>
+	{#if phase !== 'running'}
+		<ToolLeave onLeave={onClose} label={phase === 'done' ? 'Close' : 'Leave'} />
+	{/if}
 	{#if !fullscreen}
 		<div class="flex h-full flex-col items-center justify-center gap-6 px-16 text-center">
 			<p class="text-6xl font-bold">Data collection needs fullscreen</p>
-			<p class="text-3xl text-emerald-300">Press Enter to go fullscreen. Esc leaves.</p>
+			<p class="text-3xl text-slate-300">This is a development tool. Point at Leave and nod to go back.</p>
+			<button class="go" onclick={goFullscreen}>Go fullscreen</button>
 			<p class="text-2xl text-amber-300">{formError}</p>
 		</div>
 	{:else if !measured}
 		<!-- The white frame marks the exact picture to measure. -->
-		<div class="absolute inset-0 border-4 border-white"></div>
+		<div class="pointer-events-none absolute inset-0 border-4 border-white"></div>
 		<div class="flex h-full flex-col items-center justify-center gap-4 px-16 text-xl">
 			<p class="text-4xl font-bold">Before you start</p>
 			<p class="text-amber-300">
@@ -339,37 +359,52 @@
 			</label>
 
 			<p class="text-amber-300">{formError}</p>
-			<p class="text-2xl text-emerald-300">Press Enter when done</p>
+			<button class="go" onclick={confirmMeasurements}>Done</button>
 		</div>
 	{:else if phase === 'intro'}
 		<div class="flex h-full flex-col items-center justify-center gap-6 px-16 text-center">
-			<p class="text-3xl text-slate-400">Part {blockIndex + 1} of {blocks.length}, 5 minutes</p>
+			<p class="text-3xl text-slate-400">
+				Part {blockIndex + 1} of {blocks.length}, {paused ? `${minutes} left` : '5 minutes'}
+			</p>
 			<p class="text-6xl leading-tight font-bold">{blocks[blockIndex].text}</p>
 			<label class="field text-2xl">
 				<span>Your eyes to the camera, in centimetres (if you can measure it)</span>
 				<input type="number" step="1" bind:value={eyeDistanceCm} />
 			</label>
-			<p class="text-3xl text-emerald-300">Press Enter when ready. Take a break first if you want.</p>
+			<button class="go" onclick={startBlock}>Start</button>
 			<p class="text-xl text-slate-400">
-				While it runs, press Space if you ever can't find the dot. {saved} frames saved. Esc leaves.
+				Take a break first if you want. Shake your head during a part to pause it. {saved} frames saved.
 			</p>
 		</div>
 	{:else if phase === 'running'}
 		{#key dotId}
 			<div class="dot" style:left="{dot.x * 100}%" style:top="{dot.y * 100}%"></div>
 		{/key}
+		{#if engine.lock !== 'locked'}
+			<p class="absolute inset-x-0 top-0 bg-amber-500 py-3 text-center text-2xl font-bold text-black">
+				Lost you. Face the screen and nod to take control.
+			</p>
+		{/if}
 		<p class="absolute right-3 bottom-2 text-sm text-slate-600">
-			{minutes} · {saved} saved{skipped ? ` · ${skipped} skipped` : ''}{lost ? ` · ${lost} lost` : ''} · Space: can't find dot · Esc pauses
+			{minutes} · {saved} saved{skipped ? ` · ${skipped} skipped` : ''}{lost ? ` · ${lost} lost` : ''} · Shake to pause
 		</p>
 	{:else}
 		<div class="flex h-full flex-col items-center justify-center gap-6 text-center">
 			<p class="text-7xl font-bold text-emerald-300">All done. Thank you.</p>
-			<p class="text-3xl">{saved} frames saved. Press Esc and tell Claude.</p>
+			<p class="text-3xl">{saved} frames saved. Tell Claude.</p>
 		</div>
 	{/if}
 </div>
 
 <style>
+	.go {
+		border-radius: 0.8rem;
+		border: 4px solid #6ee7b7;
+		background: #047857;
+		padding: 0.6rem 2.5rem;
+		font-size: 1.6rem;
+		font-weight: 800;
+	}
 	.field {
 		display: flex;
 		width: min(52rem, 90%);

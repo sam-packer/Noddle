@@ -15,6 +15,7 @@
 	import { engine } from '../vision/engine.svelte';
 	import Confetti from './Confetti.svelte';
 	import GameExit from './GameExit.svelte';
+	import HeadCue from './HeadCue.svelte';
 
 	let {
 		session,
@@ -75,12 +76,16 @@
 	const boardEmpty = $derived(Object.keys(committed).length === 0);
 	const canPlay = $derived(stage === 'idle' && pending.length > 0 && myTurn && !playHeld);
 
-	// A shake only ever undoes the last tile placed. Closing things is the job of the close button,
-	// so a head drifting while the player thinks can't lose them anything but a tile.
+	// A shake takes back one tile: the one being held, or else the last one placed. It never does
+	// anything else, so a head drifting while the player thinks can't lose them more than that.
 	const releaseCancel = targets.claimCancel(() => {
-		if (stage !== 'idle' || !pending.length || submitted) return;
-		message = '';
-		pending = pending.slice(0, -1);
+		if (submitted || leaving) return;
+		if (stage === 'held' || stage === 'zoom' || stage === 'blank') {
+			putBack();
+		} else if (stage === 'idle' && pending.length) {
+			message = '';
+			pending = pending.slice(0, -1);
+		}
 	});
 	onDestroy(releaseCancel);
 
@@ -89,6 +94,14 @@
 		blankLetter = null;
 		blankGroup = null;
 		zoom = null;
+	}
+
+	/** The held tile goes straight back on the rack, however far it had got. */
+	function putBack() {
+		message = '';
+		stage = 'idle';
+		clearHold();
+		playHeld = pending.length > 0;
 	}
 
 	// Tiles leave the pending play once the session has taken them off the rack.
@@ -179,11 +192,8 @@
 		if (stage === 'zoom') {
 			stage = 'held';
 			zoom = null;
-			// A blank opened straight into the zoom has no "held" step to go back to.
 		} else if (stage === 'held') {
-			stage = 'idle';
-			clearHold();
-			playHeld = pending.length > 0;
+			putBack();
 		}
 	}
 
@@ -335,12 +345,12 @@
 					? 'Pass your turn?'
 					: stage === 'blank'
 						? blankGroup
-							? 'Which letter should this blank be?'
-							: 'What should this blank be? Pick a group of letters'
+							? 'Which letter should this blank be? Shake to put it back'
+							: 'Pick a group of letters for this blank, or shake to put it back'
 						: stage === 'held'
-							? `Point where ${heldLetter} should go and nod to zoom in`
+							? `Point where ${heldLetter} should go and nod to zoom in, or shake to put it back`
 							: stage === 'zoom'
-								? 'Point at a square and nod to place it'
+								? 'Point at a square and nod to place it, or shake to put it back'
 								: !view.can.place
 									? `${snap.names[view.current] ?? 'They'} is thinking`
 									: pending.length
@@ -382,6 +392,14 @@
 		});
 	});
 
+	// The lesson taught nodding. This is the one thing the demo still shows, while a shake would work.
+	const shakeCue = $derived.by(() => {
+		if (fullGame || !myTurn) return null;
+		if (stage === 'held' || stage === 'zoom') return 'Shake to put back';
+		if (stage === 'idle' && pending.length) return 'Shake to undo';
+		return null;
+	});
+
 	const cameraStyle = $derived(
 		zoom
 			? `transform: scale(${SIZE / zoom.n}) translate(${(-zoom.c0 / SIZE) * 100}%, ${(-zoom.r0 / SIZE) * 100}%)`
@@ -391,10 +409,10 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-full w-full flex-col items-center justify-between gap-2 py-3">
-	<p class="text-2xl font-semibold" class:text-emerald-300={stage === 'done'}>{headline}</p>
+<div class="table">
+	<p class="headline" class:text-emerald-300={stage === 'done'}>{headline}</p>
 
-	<div class="flex gap-6">
+	<div class="rack">
 		{#each rack as tile, i (tile.id)}
 			{@const available = stage === 'swap' || (stage === 'idle' && myTurn && !rackUsed(i))}
 			<button
@@ -415,201 +433,200 @@
 		{/each}
 	</div>
 
-	<div class="flex items-start gap-8">
-		{#if fullGame}
-			<!-- Left of the board and level with its lower half: never between the rack and the board. -->
-			<div class="side flex w-44 flex-col gap-5">
-				{#if stage === 'pass'}
-					<button
-						use:target={{ id: 'pass-no', legal: !leaving, confirm: () => (stage = 'idle') }}
-						class="action close"
-						class:focused={targets.focused === 'pass-no'}
-					>
-						✕ Keep turn
-					</button>
-					<button
-						use:target={{ id: 'pass-yes', legal: !leaving, confirm: passTurn }}
-						class="action bg-slate-600"
-						class:focused={targets.focused === 'pass-yes'}
-					>
-						Yes, pass
-					</button>
-				{:else if stage === 'swap'}
-					<button
-						use:target={{ id: 'swap-no', legal: !leaving, confirm: () => (stage = 'idle') }}
-						class="action close"
-						class:focused={targets.focused === 'swap-no'}
-					>
-						✕ Cancel
-					</button>
-					<button
-						use:target={{ id: 'swap-yes', legal: swapping.length > 0 && !leaving, confirm: confirmSwap }}
-						class="action bg-slate-600"
-						class:off={swapping.length === 0}
-						class:focused={targets.focused === 'swap-yes'}
-					>
-						Swap {swapping.length || ''}
-					</button>
-				{:else}
-					{@const canAct = stage === 'idle' && myTurn && pending.length === 0}
-					<button
-						use:target={{ id: 'pass', legal: canAct && view.can.pass, confirm: () => (stage = 'pass') }}
-						class="action bg-slate-600"
-						class:off={!(canAct && view.can.pass)}
-						class:focused={targets.focused === 'pass'}
-					>
-						Pass
-					</button>
-					<button
-						use:target={{ id: 'exchange', legal: canAct && view.can.exchange, confirm: startSwap }}
-						class="action bg-slate-600"
-						class:off={!(canAct && view.can.exchange)}
-						class:focused={targets.focused === 'exchange'}
-					>
-						Exchange
-					</button>
-				{/if}
-			</div>
+	{#if fullGame}
+		<!-- One each side of the board, level with its middle: far from the rack and from each other. -->
+		{#if stage === 'pass'}
+			<button
+				use:target={{ id: 'pass-no', legal: !leaving, confirm: () => (stage = 'idle') }}
+				class="action close side-left"
+				class:focused={targets.focused === 'pass-no'}
+			>
+				✕ Keep turn
+			</button>
+			<button
+				use:target={{ id: 'pass-yes', legal: !leaving, confirm: passTurn }}
+				class="action side-right bg-slate-600"
+				class:focused={targets.focused === 'pass-yes'}
+			>
+				Yes, pass
+			</button>
+		{:else if stage === 'swap'}
+			<button
+				use:target={{ id: 'swap-no', legal: !leaving, confirm: () => (stage = 'idle') }}
+				class="action close side-left"
+				class:focused={targets.focused === 'swap-no'}
+			>
+				✕ Cancel
+			</button>
+			<button
+				use:target={{ id: 'swap-yes', legal: swapping.length > 0 && !leaving, confirm: confirmSwap }}
+				class="action side-right bg-slate-600"
+				class:off={swapping.length === 0}
+				class:focused={targets.focused === 'swap-yes'}
+			>
+				Swap {swapping.length || ''}
+			</button>
+		{:else if stage !== 'done'}
+			{@const canAct = stage === 'idle' && myTurn && pending.length === 0}
+			<button
+				use:target={{ id: 'pass', legal: canAct && view.can.pass, confirm: () => (stage = 'pass') }}
+				class="action side-left bg-slate-600"
+				class:off={!(canAct && view.can.pass)}
+				class:focused={targets.focused === 'pass'}
+			>
+				Pass
+			</button>
+			<button
+				use:target={{ id: 'exchange', legal: canAct && view.can.exchange, confirm: startSwap }}
+				class="action side-right bg-slate-600"
+				class:off={!(canAct && view.can.exchange)}
+				class:focused={targets.focused === 'exchange'}
+			>
+				Exchange
+			</button>
+		{/if}
+	{/if}
+
+	<div
+		{@attach (el) => {
+			boardEl = el;
+		}}
+		use:target={{ id: 'board', legal: stage === 'held' && !leaving, confirm: openZoom }}
+		class="board"
+		class:ready={stage === 'held'}
+	>
+		<div class="camera" style={cameraStyle}>
+			{#each { length: SIZE * SIZE } as _, i (i)}
+				{@const r = Math.floor(i / SIZE)}
+				{@const c = i % SIZE}
+				{@const letter = letterAt(r, c)}
+				{@const pr = premium(r, c)}
+				<div class="cell" style:background={pr ? PREMIUM_COLOR[pr] : null}>
+					{#if letter}
+						<div
+							class="tile"
+							class:new={!!pendingAt(r, c)}
+							class:recent={recent.includes(`${r},${c}`)}
+							class:blank={blankAt(r, c)}
+							in:scale={{ start: 1.8, duration: 260 }}
+						>
+							{letter}<sub>{blankAt(r, c) ? 0 : tileValue(letter)}</sub>
+						</div>
+					{:else if pr}
+						<span class="prem">{pr}</span>
+					{/if}
+				</div>
+			{/each}
+		</div>
+
+		{#if zoomPreview}
+			<div
+				class="zoom-box"
+				style:left="{(zoomPreview.c0 / SIZE) * 100}%"
+				style:top="{(zoomPreview.r0 / SIZE) * 100}%"
+				style:width="{(zoomPreview.n / SIZE) * 100}%"
+				style:height="{(zoomPreview.n / SIZE) * 100}%"
+			></div>
 		{/if}
 
-		<div
-			{@attach (el) => {
-				boardEl = el;
-			}}
-			use:target={{ id: 'board', legal: stage === 'held' && !leaving, confirm: openZoom }}
-			class="board"
-			class:ready={stage === 'held'}
-		>
-			<div class="camera" style={cameraStyle}>
-				{#each { length: SIZE * SIZE } as _, i (i)}
-					{@const r = Math.floor(i / SIZE)}
-					{@const c = i % SIZE}
-					{@const letter = letterAt(r, c)}
-					{@const pr = premium(r, c)}
-					<div class="cell" style:background={pr ? PREMIUM_COLOR[pr] : null}>
-						{#if letter}
-							<div
-								class="tile"
-								class:new={!!pendingAt(r, c)}
-								class:recent={recent.includes(`${r},${c}`)}
-								class:blank={blankAt(r, c)}
-								in:scale={{ start: 1.8, duration: 260 }}
-							>
-								{letter}<sub>{blankAt(r, c) ? 0 : tileValue(letter)}</sub>
-							</div>
-						{:else if pr}
-							<span class="prem">{pr}</span>
+		{#if zoom}
+			{@const z = zoom}
+			<div
+				class="overlay"
+				in:fade={{ duration: 150, delay: 280 }}
+				style="grid-template-columns:repeat({z.n},1fr);grid-template-rows:repeat({z.n},1fr)"
+			>
+				{#each { length: z.n * z.n } as _, i (i)}
+					{@const r = z.r0 + Math.floor(i / z.n)}
+					{@const c = z.c0 + i % z.n}
+					{@const playable = squareIsPlayable(r, c)}
+					<button
+						use:target={{
+							id: `cell-${r}-${c}`,
+							legal: !letterAt(r, c) && !leaving,
+							exact: true,
+							confirm: () => placeAt(r, c)
+						}}
+						class="spot"
+						class:blocked={!playable && !letterAt(r, c)}
+						class:focused={targets.focused === `cell-${r}-${c}`}
+						aria-label="Row {r + 1} column {c + 1}"
+					>
+						{#if targets.focused === `cell-${r}-${c}`}
+							<span class="ghost">{heldLetter}</span>
 						{/if}
-					</div>
+					</button>
 				{/each}
 			</div>
-
-			{#if zoomPreview}
-				<div
-					class="zoom-box"
-					style:left="{(zoomPreview.c0 / SIZE) * 100}%"
-					style:top="{(zoomPreview.r0 / SIZE) * 100}%"
-					style:width="{(zoomPreview.n / SIZE) * 100}%"
-					style:height="{(zoomPreview.n / SIZE) * 100}%"
-				></div>
-			{/if}
-
-			{#if zoom}
-				{@const z = zoom}
-				<div
-					class="overlay"
-					in:fade={{ duration: 150, delay: 280 }}
-					style="grid-template-columns:repeat({z.n},1fr);grid-template-rows:repeat({z.n},1fr)"
-				>
-					{#each { length: z.n * z.n } as _, i (i)}
-						{@const r = z.r0 + Math.floor(i / z.n)}
-						{@const c = z.c0 + i % z.n}
-						{@const playable = squareIsPlayable(r, c)}
-						<button
-							use:target={{
-								id: `cell-${r}-${c}`,
-								legal: !letterAt(r, c) && !leaving,
-								exact: true,
-								confirm: () => placeAt(r, c)
-							}}
-							class="spot"
-							class:blocked={!playable && !letterAt(r, c)}
-							class:focused={targets.focused === `cell-${r}-${c}`}
-							aria-label="Row {r + 1} column {c + 1}"
-						>
-							{#if targets.focused === `cell-${r}-${c}`}
-								<span class="ghost">{heldLetter}</span>
-							{/if}
-						</button>
-					{/each}
-				</div>
-			{/if}
-		</div>
-
-		<div class="flex w-44 flex-col gap-5">
-			{#if fullGame}
-				<div class="scores">
-					{#each view.scores as score, seat (seat)}
-						<p class:turn={view.current === seat && !snap.ended} class="font-bold">
-							<span>{seat === view.me ? 'You' : snap.names[seat]}</span>
-							<span>{score}</span>
-						</p>
-					{/each}
-					<p class="bag">{view.bagCount} in the bag</p>
-				</div>
-			{:else}
-				<p class="text-center text-3xl font-bold">Score {view.scores[view.me]}</p>
-			{/if}
-			<button
-				use:target={{ id: 'close', legal: (stage === 'held' || stage === 'zoom') && !leaving, confirm: closeStep }}
-				class="action close"
-				class:gone={stage !== 'held' && stage !== 'zoom'}
-				class:focused={targets.focused === 'close'}
-			>
-				✕ {stage === 'zoom' ? 'Zoom out' : 'Put back'}
-			</button>
-			{#if stage === 'done'}
-				{#if restartDemo}
-					<button
-						use:target={{ id: 'again', legal: endButtons, confirm: restartDemo }}
-						class="action play bg-emerald-700"
-						class:off={!endButtons}
-						class:focused={targets.focused === 'again'}
-					>
-						↺ Restart
-					</button>
-				{:else if snap.canRestart && session.restart}
-					<button
-						use:target={{ id: 'again', legal: endButtons, confirm: () => session.restart?.() }}
-						class="action play bg-emerald-700"
-						class:off={!endButtons}
-						class:focused={targets.focused === 'again'}
-					>
-						Play again
-					</button>
-				{/if}
-				<button
-					use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
-					class="action exit"
-					class:play={!restartDemo && !(snap.canRestart && session.restart)}
-					class:off={!endButtons}
-					class:focused={targets.focused === 'menu'}
-				>
-					✕ Menu
-				</button>
-			{:else}
-				<button
-					use:target={{ id: 'play', legal: canPlay, confirm: playWord }}
-					class="action play bg-emerald-700"
-					class:off={!canPlay}
-					class:focused={targets.focused === 'play'}
-				>
-					Play
-				</button>
-			{/if}
-		</div>
+		{/if}
 	</div>
 
+	<div class="scores-area">
+		{#if fullGame}
+			<div class="scores">
+				{#each view.scores as score, seat (seat)}
+					<p class:turn={view.current === seat && !snap.ended} class="font-bold">
+						<span>{seat === view.me ? 'You' : snap.names[seat]}</span>
+						<span>{score}</span>
+					</p>
+				{/each}
+				<p class="bag">{view.bagCount} in the bag</p>
+			</div>
+		{:else}
+			<p class="text-center text-3xl font-bold">Score {view.scores[view.me]}</p>
+		{/if}
+	</div>
+
+	{#if shakeCue}
+		<div class="cue cue-left" transition:fade={{ duration: 150 }}>
+			<HeadCue gesture="shake" size="var(--cue)" />
+			<p>{shakeCue}</p>
+		</div>
+	{/if}
+
+	<!-- For anyone whose shake doesn't register, and the only way to a far square once zoomed. -->
+	<button
+		use:target={{ id: 'close', legal: (stage === 'held' || stage === 'zoom') && !leaving, confirm: closeStep }}
+		class="action close back-corner"
+		class:gone={stage !== 'held' && stage !== 'zoom'}
+		class:focused={targets.focused === 'close'}
+	>
+		<span>✕</span>
+		{stage === 'zoom' ? 'Zoom out' : 'Put back'}
+	</button>
+
+	{#if stage === 'done'}
+		{@const again = restartDemo ?? (snap.canRestart && session.restart ? () => session.restart?.() : null)}
+		{#if again}
+			<button
+				use:target={{ id: 'again', legal: endButtons, confirm: again }}
+				class="action far-corner bg-emerald-700"
+				class:off={!endButtons}
+				class:focused={targets.focused === 'again'}
+			>
+				{restartDemo ? '↺ Restart' : 'Play again'}
+			</button>
+		{/if}
+		<button
+			use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
+			class="action exit"
+			class:far-corner={!again}
+			class:menu-corner={!!again}
+			class:off={!endButtons}
+			class:focused={targets.focused === 'menu'}
+		>
+			✕ Menu
+		</button>
+	{:else}
+		<button
+			use:target={{ id: 'play', legal: canPlay, confirm: playWord }}
+			class="action far-corner bg-emerald-700"
+			class:off={!canPlay}
+			class:focused={targets.focused === 'play'}
+		>
+			Play
+		</button>
+	{/if}
 </div>
 
 {#if snap.ended?.won}<Confetti />{/if}
@@ -625,7 +642,7 @@
 
 {#if stage === 'blank'}
 	<div transition:fade={{ duration: 200 }} class="fixed inset-0 z-[5] bg-black/70"></div>
-	<p class="pointer-events-none fixed inset-x-0 top-[12%] z-[6] text-center text-5xl font-bold">{prompt}</p>
+	<p class="pointer-events-none fixed inset-x-48 top-[11%] z-[6] text-center text-5xl font-bold text-balance">{prompt}</p>
 	<button
 		use:target={{ id: 'blank-close', legal: !leaving, confirm: closeBlank }}
 		class="blank-close"
@@ -669,11 +686,48 @@
 {/if}
 
 <style>
-	.board {
+	/*
+	 * The pointer selects a target from up to 110px outside its edge (input/hitbox.ts), so targets
+	 * that are legal together need 220px between them for those zones not to overlap. In pixels,
+	 * because the reach is. 712px is what's left for the board's two margins when the close button
+	 * (left) and the Leave button (right) both keep that distance from it.
+	 */
+	.table {
+		--rack-tile: min(5.5rem, 10vh);
+		--board-top: calc(3.5rem + var(--rack-tile));
+		--board: min(calc(100vh - var(--board-top) - 1rem), calc(100vw - 712px));
+		--board-left: calc((100vw - var(--board) - 1.5rem) / 2);
+		--cue: 15rem;
 		position: relative;
-		height: min(70vh, 56vw);
-		width: min(70vh, 56vw);
-		flex-shrink: 0;
+		height: 100%;
+		width: 100%;
+	}
+	.headline {
+		position: absolute;
+		left: 1.5rem;
+		right: 16.5rem;
+		top: 0.5rem;
+		text-align: center;
+		font-size: 1.5rem;
+		font-weight: 600;
+		line-height: 2rem;
+	}
+	/* Up high to save the neck, and stopping 120px short of the Leave button. */
+	.rack {
+		position: absolute;
+		left: 1.5rem;
+		right: 16.5rem;
+		top: 2.75rem;
+		display: flex;
+		justify-content: center;
+		gap: calc((100vw - 18rem - 7 * var(--rack-tile)) / 6);
+	}
+	.board {
+		position: absolute;
+		left: var(--board-left);
+		top: var(--board-top);
+		height: var(--board);
+		width: var(--board);
 		overflow: hidden;
 		border: 3px solid #475569;
 		background: #0f172a;
@@ -706,13 +760,14 @@
 	}
 	.tile {
 		display: flex;
-		height: 100%;
-		width: 100%;
+		height: 84%;
+		width: 84%;
+		border-radius: 12%;
 		align-items: center;
 		justify-content: center;
 		background: #fcd34d;
 		color: #1c1917;
-		font-size: 3.6cqw;
+		font-size: 2.7cqw;
 		font-weight: 800;
 	}
 	.tile.new {
@@ -731,7 +786,7 @@
 	}
 	.prem {
 		color: white;
-		font-size: 1.6cqw;
+		font-size: 1.4cqw;
 		opacity: 0.8;
 	}
 	.zoom-box {
@@ -792,13 +847,70 @@
 		background: #b91c1c;
 		font-size: 1.5rem;
 	}
-	/* Well clear of the rack, so reaching for a letter can't land on Play. */
-	.play {
-		margin-top: 2.5rem;
+	/* In the corner, as far from the rack as it can be, so reaching for a letter can't land on Play. */
+	.far-corner,
+	.menu-corner {
+		position: absolute;
+		bottom: 1.5rem;
+		height: 7rem;
+		width: 13rem;
 	}
-	/* Level with the lower half of the board, the same distance from the rack as Play. */
-	.side {
-		margin-top: 14rem;
+	.far-corner {
+		right: 1.5rem;
+	}
+	.menu-corner {
+		left: 1.5rem;
+	}
+	.back-corner {
+		position: absolute;
+		bottom: 1.5rem;
+		left: 1.5rem;
+		display: flex;
+		height: 7rem;
+		width: 6rem;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		font-size: 1rem;
+		line-height: 1.1;
+	}
+	.back-corner span {
+		font-size: 2rem;
+	}
+	.side-left,
+	.side-right {
+		position: absolute;
+		top: 48%;
+		width: 12rem;
+	}
+	.side-left {
+		left: 1.5rem;
+	}
+	.side-right {
+		right: 1.5rem;
+	}
+	.scores-area {
+		position: absolute;
+		right: 1.5rem;
+		top: var(--board-top);
+		width: 12rem;
+	}
+	/* In the margins, between the things that can be selected. Pictures can't be, and don't catch it. */
+	.cue {
+		position: absolute;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+		font-size: 1.25rem;
+		font-weight: 700;
+		color: #fde047;
+		pointer-events: none;
+		width: var(--cue);
+	}
+	.cue-left {
+		left: calc((var(--board-left) - var(--cue)) / 2);
+		top: calc(var(--board-top) + 2rem);
 	}
 	.exit {
 		background: #334155;
@@ -830,15 +942,15 @@
 		position: fixed;
 		left: 3%;
 		right: 3%;
-		top: 36%;
+		top: 38%;
 		z-index: 6;
 		display: flex;
 		justify-content: center;
-		gap: 3vw;
+		gap: 8.4vw;
 	}
 	.blank-choice {
 		height: 34vh;
-		width: 13vw;
+		width: 8.8vw;
 		border-radius: 1.2rem;
 		border: 6px solid white;
 		background: #fcd34d;
@@ -848,7 +960,7 @@
 		transition: transform 90ms ease-out;
 	}
 	.blank-choice.group {
-		width: 15vw;
+		width: 12.5vw;
 		font-size: 3rem;
 	}
 	.blank-close {
@@ -875,14 +987,15 @@
 	}
 	.rack-tile {
 		display: flex;
-		height: 6.5rem;
-		width: 6.5rem;
+		height: var(--rack-tile);
+		width: var(--rack-tile);
+		flex-shrink: 0;
 		align-items: center;
 		justify-content: center;
 		border-radius: 0.6rem;
 		background: #fcd34d;
 		color: #1c1917;
-		font-size: 2.5rem;
+		font-size: 2.25rem;
 		font-weight: 800;
 		box-shadow: 0 6px 12px rgb(0 0 0 / 0.4);
 		transition:
@@ -896,11 +1009,17 @@
 	.gone {
 		visibility: hidden;
 	}
+	/* No lift for a rack tile, or it would cover the words just above it. */
+	.rack-tile.focused {
+		transform: translateY(calc(var(--press, 0) * 0.5rem)) scale(calc(1.14 - var(--press, 0) * 0.1));
+	}
+	.action.focused {
+		transform: translateY(calc(-0.9rem + var(--press, 0) * 1rem))
+			scale(calc(1.14 - var(--press, 0) * 0.1));
+	}
 	.rack-tile.focused,
 	.action.focused {
 		opacity: 1;
-		transform: translateY(calc(-0.9rem + var(--press, 0) * 1rem))
-			scale(calc(1.14 - var(--press, 0) * 0.1));
 		box-shadow:
 			0 0 0 4px #fde047,
 			0 0 40px 12px rgb(253 224 71 / 0.75);

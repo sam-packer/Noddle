@@ -1,6 +1,7 @@
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { session } from '../session';
 import { HeadGestures, type Gesture } from './gestures';
+import { profileFromPoses, type HeadPose, type HeadProfile } from './headProfile';
 import {
 	faceBox,
 	headAngles,
@@ -33,8 +34,13 @@ export const setup = {
 	headRestY: 0.6,
 	/** Swaps left and right, if a setup ever needs it. */
 	headFlipX: false,
-	/** Eye tracking stays in the code but off: head tracking is the demo, and this saves the CPU. */
+	/** Eye tracking stays in the code but off: head tracking is the point of Noddle. */
 	eyeModels: false,
+	/**
+	 * Fit each player's centre and range from the lesson's corner cards, with the pointer hidden.
+	 * Off, because a screen with no pointer read as broken even to someone who knows the game.
+	 */
+	personalHead: false,
 	/** Head movement smaller than this leaves the pointer exactly where it is. */
 	headDeadbandDeg: 0.6,
 	minFaceWidth: 0.06,
@@ -60,8 +66,8 @@ type HistoryEntry = {
 	free: Point | null;
 	calibrated: Point | null;
 	head: Point | null;
-	headDefault: Point | null;
-	headFeatures: number[];
+	heldYaw: number;
+	heldPitch: number;
 };
 
 export type DataFrame = {
@@ -80,7 +86,12 @@ export type DataFrame = {
 	ear: number;
 };
 
-type Sample = { target: Point; headFeatures: number[]; headDefault: Point };
+/** The ranges everyone starts with, and goes back to when a new player arrives. */
+const DEFAULT_RANGES = {
+	rangeYaw: setup.headRangeYawDeg,
+	rangeUp: setup.headRangePitchDeg,
+	rangeDown: setup.headRangeDownDeg
+};
 
 /** How much of each signal is median filtered, in ms. Eye models get long windows, for nystagmus. */
 const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 100 };
@@ -88,6 +99,8 @@ const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 
 const HOLD_AFTER_GESTURE_MS = 400;
 /** Taking control is a clear nod, because anyone in view could trigger it by accident. */
 const LOCK_NOD_DEG = 3.5;
+/** A card only teaches us anything if the head really turned toward it. */
+const MIN_TURN_DEG = 2;
 
 function clampToViewport(p: Point): Point {
 	return {
@@ -144,6 +157,10 @@ class VisionEngine {
 	pointer = $state<Point | null>(null);
 	/** A nod may be under way, so the selection keeps what it had. The pointer keeps moving. */
 	selectionHeld = $state(false);
+	/** Learning this player's head with the pointer hidden, so they can't steer to fit the mapping. */
+	headCalibrating = $state(false);
+	/** Their fitted centre and range, once learned. */
+	headProfile = $state<HeadProfile | null>(null);
 	/** How far through a nod the player is, from 0 to 1. Lets the selected thing dip with the head. */
 	nodProgress = $state(0);
 	forced = $state<SourceId | null>(null);
@@ -211,7 +228,7 @@ class VisionEngine {
 	private recording: Record<string, unknown>[] | null = null;
 	private headNeutralAfter = 0;
 	private lastLockedBox: FaceBox | null = null;
-	private samples: Sample[] = [];
+	private poses: HeadPose[] = [];
 	private errorsCm: Record<SourceId, number[]> = { free: [], calibrated: [], head: [] };
 
 	async start() {
@@ -540,9 +557,12 @@ class VisionEngine {
 		this.lockedId = track.id;
 		this.lockedLastSeen = ts;
 		this.lock = 'locked';
-		this.headNeutral = null;
-		// The head is still finishing the nod, so wait before taking its resting position.
-		this.headNeutralAfter = ts + 600;
+		// The same player coming back keeps the centre fitted to them.
+		if (!this.headProfile) {
+			this.headNeutral = null;
+			// The head is still finishing the nod, so wait before taking its resting position.
+			this.headNeutralAfter = ts + 600;
+		}
 		this.onLocked?.();
 	}
 
@@ -589,7 +609,9 @@ class VisionEngine {
 		this.heldPitch = null;
 		this.headSmoothYaw.reset();
 		this.headSmoothPitch.reset();
-		this.samples = [];
+		this.poses = [];
+		this.headCalibrating = false;
+		this.useProfile(null);
 		this.history = [];
 		this.recent = { free: [], calibrated: [], head: [] };
 		this.holdUntil = 0;
@@ -672,7 +694,7 @@ class VisionEngine {
 			this.headNeutral = { yaw: this.heldYaw, pitch: this.heldPitch };
 		}
 		const neutral = this.headNeutral ?? { yaw: this.heldYaw, pitch: this.heldPitch };
-		const headDefault = {
+		this.raw.head = {
 			x:
 				window.innerWidth / 2 -
 				(setup.headFlipX ? -1 : 1) *
@@ -680,8 +702,6 @@ class VisionEngine {
 					(window.innerWidth / 2),
 			y: this.headY(this.heldPitch - neutral.pitch)
 		};
-		const headFeatures = [this.heldYaw / 20, this.heldPitch / 20, 1];
-		this.raw.head = headDefault;
 
 		const next: Record<SourceId, Point | null> = { free: null, calibrated: null, head: null };
 		for (const s of SOURCES) {
@@ -725,8 +745,8 @@ class VisionEngine {
 			free: this.raw.free,
 			calibrated: this.raw.calibrated,
 			head: this.raw.head,
-			headDefault,
-			headFeatures
+			heldYaw: this.heldYaw,
+			heldPitch: this.heldPitch
 		});
 		while (this.history.length && ts - this.history[0].t > 2500) this.history.shift();
 
@@ -846,12 +866,7 @@ class VisionEngine {
 			this.freeBiasN++;
 		}
 
-		// Head fit, kept only if it clearly beats the default mapping on these samples.
-		const feat = win.map((h) => h.headFeatures);
-		const avg = feat[0].map((_, i) => median(feat.map((f) => f[i])));
-		const headDefault = medianPoint(win.map((h) => h.headDefault).filter((p): p is Point => !!p));
-		if (headDefault) this.samples.push({ target, headFeatures: avg, headDefault });
-		this.sampleCount = this.samples.length;
+		this.sampleCount += 1;
 
 		// Calibrated model, in [-0.5, 0.5] viewport coordinates.
 		this.calWorker?.postMessage({
@@ -861,6 +876,65 @@ class VisionEngine {
 			tFrom,
 			tTo
 		});
+	}
+
+	/** Hides the pointer and starts learning this player's head from the lesson's cards. */
+	beginHeadCalibration() {
+		if (!setup.personalHead) return;
+		this.useProfile(null);
+		this.poses = [];
+		this.headCalibrating = true;
+	}
+
+	/**
+	 * Records where the head was when the player nodded at a card, given as a point on the screen.
+	 * Returns false if it hadn't turned toward that card, so the nod says nothing about it.
+	 */
+	addHeadPose(target: Point, onset: number) {
+		if (!this.headCalibrating) return true;
+		const win = this.window(onset - 650, onset - 80);
+		if (win.length === 0) return false;
+		const pose: HeadPose = {
+			x: target.x / window.innerWidth,
+			y: target.y / window.innerHeight,
+			yaw: median(win.map((h) => h.heldYaw)),
+			pitch: median(win.map((h) => h.heldPitch))
+		};
+		const previous = this.poses[this.poses.length - 1] ?? {
+			x: 0.5,
+			y: setup.headRestY,
+			yaw: this.headNeutral?.yaw ?? pose.yaw,
+			pitch: this.headNeutral?.pitch ?? pose.pitch
+		};
+		const dx = (pose.x - previous.x) * window.innerWidth;
+		const dy = (pose.y - previous.y) * window.innerHeight;
+		// Moving right on screen lowers yaw, and moving up raises pitch.
+		const turned =
+			Math.abs(dx) >= Math.abs(dy)
+				? (previous.yaw - pose.yaw) * Math.sign(dx) * (setup.headFlipX ? -1 : 1)
+				: (previous.pitch - pose.pitch) * Math.sign(dy);
+		if (turned < MIN_TURN_DEG) return false;
+		this.poses.push(pose);
+		return true;
+	}
+
+	/** Brings the pointer back, using what was learned if there was enough of it. */
+	endHeadCalibration() {
+		if (!this.headCalibrating) return;
+		this.headCalibrating = false;
+		const profile = profileFromPoses(this.poses, DEFAULT_RANGES, setup.headRestY, setup.headFlipX);
+		session.event('head-profile', { poses: this.poses, profile });
+		if (profile) this.useProfile(profile);
+	}
+
+	/** Puts a profile into the mapping. The ranges stay in `setup`, where the tools can change them. */
+	private useProfile(profile: HeadProfile | null) {
+		this.headProfile = profile;
+		const ranges = profile ?? DEFAULT_RANGES;
+		setup.headRangeYawDeg = ranges.rangeYaw;
+		setup.headRangePitchDeg = ranges.rangeUp;
+		setup.headRangeDownDeg = ranges.rangeDown;
+		if (profile) this.headNeutral = { yaw: profile.neutralYaw, pitch: profile.neutralPitch };
 	}
 
 	bestSource(): SourceId {

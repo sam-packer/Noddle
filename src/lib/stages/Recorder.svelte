@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { targets } from '../input/targets.svelte';
 	import { engine } from '../vision/engine.svelte';
+	import ToolLeave from './ToolLeave.svelte';
 
 	let { onClose }: { onClose: () => void } = $props();
 
@@ -38,7 +39,7 @@
 				{ x: 80, y: 30 }
 			]
 		},
-		{ id: 'gentle-nod', text: 'Nod gently, like clicking a card. Five separate times', seconds: 11 },
+		{ id: 'gentle-nod', text: 'Nod gently, like picking a card. Five separate times', seconds: 11 },
 		{ id: 'gentle-shake', text: 'Shake gently, like saying no. Five separate times', seconds: 11 },
 		{ id: 'top-nod', text: 'Point at the top of the screen and nod three times', seconds: 7 },
 		{ id: 'side-shake', text: 'Point at the middle and shake once, then rest. Three times', seconds: 9 }
@@ -113,6 +114,7 @@
 		></div>
 	{/if}
 	{#if index < steps.length}
+		<ToolLeave onLeave={onClose} />
 		<p class="px-10 text-7xl font-bold text-white">{steps[index].text}</p>
 		<p class="text-3xl text-slate-400">Step {index + 1} of {steps.length}</p>
 	{:else}

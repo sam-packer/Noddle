@@ -32,7 +32,7 @@ class SmoothPointer {
 
 	private follow(dt: number) {
 		const p = engine.pointer;
-		if (!p) {
+		if (!p || engine.headCalibrating) {
 			this.visible = false;
 			return;
 		}

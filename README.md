@@ -7,10 +7,10 @@ Uno and Scrabble played with head movements through a laptop webcam. The head po
 `/` opens the menu once the camera has found you, and the instructions run before whatever you open first. Every screen has a button to go back, and anything that would lose your place asks first.
 
 - **Single player:** Uno against three bots, or Scrabble against one. Neither needs internet.
-- **Multiplayer:** share the room link, or the code if the other person has a keyboard. Uno takes 2 to 4 people, with bots in any empty seats, and Scrabble takes 2.
+- **Multiplayer:** share the room link, or the code, which the other person picks with their head under Join with a code. Uno takes 2 to 4 people, with bots in any empty seats, and Scrabble takes 2.
 - **Demo:** the scripted run: a Uno hand, then a Scrabble word. It needs no server beyond the page itself. ↺ Restart, in the corner and at the end, takes it back to the lesson.
 
-Keyboard and mouse work everywhere: arrows or hover to select, Enter or click to confirm, and Esc to undo a tile.
+Everything a player does works by head alone. Keys and the mouse are only there for development: arrows or hover to select, Enter or click to confirm, and Esc to undo a tile.
 
 ## Multiplayer
 

@@ -74,7 +74,7 @@
 	>
 		✕ Close debug
 	</button>
-	<p>While this is open: P menu · R restart · N skip · B test run · G record · K collect · T/Y accuracy · H hand over</p>
+	<p>Development keys, while this is open: P menu · R restart · N skip · B test run · G record · K collect (Space in a run marks a dot you can't find) · T/Y accuracy · H hand over</p>
 	<button class="record" onclick={onRecord}>Record nods and shakes (G)</button>
 
 	<canvas {@attach (c) => engine.addPreview(c)} width="256" height="144" class="w-full rounded"></canvas>

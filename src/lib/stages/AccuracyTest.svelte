@@ -4,6 +4,7 @@
 	import { engine, SOURCES, type SourceId } from '../vision/engine.svelte';
 	import { median, type Point } from '../vision/math';
 	import { testLog } from './testlog.svelte';
+	import ToolLeave from './ToolLeave.svelte';
 
 	let { train, onClose }: { train: boolean; onClose: () => void } = $props();
 
@@ -88,6 +89,8 @@
 </script>
 
 <div class="fixed inset-0 z-40 bg-slate-950">
+	<!-- Between two dots, because one of them is in the corner where this usually goes. -->
+	<ToolLeave onLeave={onClose} style="right:auto;left:calc(71% - 5rem)" />
 	<p class="absolute top-[38%] w-full text-center text-3xl text-slate-300">
 		{train ? 'Calibration pass' : 'Accuracy test'}: look at the red dot and point your head at it
 		({Math.min(index + 1, dots.length)}/{dots.length})

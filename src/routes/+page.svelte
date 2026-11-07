@@ -19,6 +19,7 @@
 	import type { ScrabbleAction, ScrabbleView } from '../lib/games/scrabble/engine';
 	import Menu, { type MenuChoice } from '../lib/stages/Menu.svelte';
 	import Room from '../lib/stages/Room.svelte';
+	import { toolInput } from '../lib/stages/ToolLeave.svelte';
 	import { engine, setup, SOURCES } from '../lib/vision/engine.svelte';
 	import { gestureConfig } from '../lib/vision/gestures';
 
@@ -172,9 +173,16 @@
 		session.start({ gestures: { ...gestureConfig } });
 		engine.onFrame = (p, t) => targets.updateGaze(p, t, engine.selectionHeld);
 		engine.onGesture = (g) => {
-			if (test || collecting) return;
 			if (away || performance.now() < ignoreGesturesUntil) {
 				session.event('ignored', { kind: g.kind, why: away ? 'away' : 'just back' });
+				// Still in view with another window in front, so this nod brings the game back. That's
+				// all it does: it never reaches a target. A hidden tab comes back when it's shown.
+				if (away && !document.hidden && g.kind === confirmWith) setAway(false);
+				return;
+			}
+			if (test || collecting || recording) {
+				if (g.kind === confirmWith) toolInput.nod?.(g.onset);
+				else toolInput.shake?.();
 				return;
 			}
 			if (g.kind === confirmWith) targets.confirmGaze(g.onset);
@@ -182,6 +190,8 @@
 		};
 		engine.onLocked = () => {
 			if (stage === 'gate') next();
+			// The same nod answers both banners, rather than asking for one more.
+			if (!document.hidden) setAway(false);
 		};
 		engine.start();
 		return smoothPointer.start();
@@ -318,11 +328,11 @@
 	{/if}
 
 	{#if engine.lock === 'lost' && stage !== 'gate'}
-		<div class="fixed inset-x-0 top-0 z-30 bg-amber-500 py-3 text-center text-2xl font-bold text-black">
+		<div class="banner">
 			Lost you. Face the screen and nod to take control.
 		</div>
 	{:else if engine.lock === 'locked' && !engine.inBounds}
-		<div class="fixed inset-x-0 top-0 z-30 bg-amber-500 py-3 text-center text-2xl font-bold text-black">
+		<div class="banner">
 			Step back into view
 		</div>
 	{/if}
@@ -337,7 +347,7 @@
 
 {#if away}
 	<p class="fixed inset-x-0 top-0 z-[70] bg-sky-700 py-3 text-center text-2xl font-bold text-white">
-		Paused while you're away. Click back to keep playing.
+		Paused while you're away. Nod to keep playing.
 	</p>
 {/if}
 
@@ -362,6 +372,21 @@
 {/if}
 
 <style>
+	/* Narrow enough to leave the corners clear, because that's where the way out of a screen is. */
+	.banner {
+		position: fixed;
+		left: 50%;
+		top: 0;
+		z-index: 45;
+		translate: -50% 0;
+		border-radius: 0 0 0.8rem 0.8rem;
+		background: #f59e0b;
+		padding: 0.75rem 2rem;
+		color: black;
+		font-size: 1.5rem;
+		font-weight: 700;
+		white-space: nowrap;
+	}
 	.pointer {
 		position: fixed;
 		left: 0;
