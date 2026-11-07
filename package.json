@@ -9,6 +9,10 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
+		"dev:rooms": "wrangler d1 migrations apply noddle --local --config workers/rooms/wrangler.jsonc && wrangler dev --config workers/rooms/wrangler.jsonc --port 8787",
+		"dev:all": "trap 'kill 0' EXIT; bun run dev:rooms & vite dev",
+		"rooms:check": "bun scripts/rooms-check.ts",
+		"deploy:rooms": "wrangler deploy --config workers/rooms/wrangler.jsonc",
 		"build": "wrangler types --check && vite build",
 		"preview": "wrangler dev .svelte-kit/cloudflare/_worker.js --port 4173",
 		"prepare": "svelte-kit sync || echo ''",

@@ -1,0 +1,21 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "noddle-rooms",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-11-07",
+	"rules": [{ "type": "Text", "globs": ["**/*.txt"], "fallthrough": false }],
+	"durable_objects": {
+		"bindings": [{ "name": "ROOMS", "class_name": "RoomObject" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomObject"] }],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "noddle",
+			// Replace with the id from `wrangler d1 create noddle` before deploying. Local dev ignores it.
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "../../drizzle"
+		}
+	],
+	"observability": { "enabled": true }
+}

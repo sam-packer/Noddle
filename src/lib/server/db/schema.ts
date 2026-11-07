@@ -1,7 +1,11 @@
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
-export const task = sqliteTable('task', {
+/** One row per finished multiplayer game. */
+export const gameResult = sqliteTable('game_result', {
 	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
-	title: text('title').notNull(),
-	priority: integer('priority').notNull().default(1)
+	game: text('game').notNull(),
+	players: integer('players').notNull(),
+	/** Null when a game ends level. */
+	winnerSeat: integer('winner_seat'),
+	endedAt: integer('ended_at', { mode: 'timestamp_ms' }).notNull()
 });
