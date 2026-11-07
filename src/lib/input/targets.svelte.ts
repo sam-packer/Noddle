@@ -36,7 +36,8 @@ const HOLD_NO_GAZE_MS = 1000;
 const MAGNET_MAX_WIDTH_PX = 320;
 /** It doesn't lean when another target is this close, because exactly where it is matters then. */
 const MAGNET_CLEAR_PX = 260;
-const MOUSE_PRIORITY_MS = 1500;
+/** After an arrow key, the head leaves the selection alone for this long. */
+const KEY_PRIORITY_MS = 6000;
 /**
  * A nod moves the head up and down. This much sideways after it began means the player was still
  * arriving, so the neighbour they arrived at is what they meant, and not the one they passed.
@@ -271,22 +272,13 @@ class Targets {
 		if (this.enabled) this.onCancel?.();
 	}
 
-	mouseEnter(id: string) {
-		this.inputPriorityUntil = performance.now() + MOUSE_PRIORITY_MS;
-		if (this.entries.get(id)?.def.legal) this.setFocus(id);
-	}
-
-	mouseMoved() {
-		this.inputPriorityUntil = performance.now() + MOUSE_PRIORITY_MS;
-	}
-
 	click(id: string, point: Point) {
 		const e = this.entries.get(id);
 		if (e?.def.legal) e.def.confirm({ point, via: 'mouse' });
 	}
 
 	move(dx: number, dy: number) {
-		this.inputPriorityUntil = performance.now() + MOUSE_PRIORITY_MS * 4;
+		this.inputPriorityUntil = performance.now() + KEY_PRIORITY_MS;
 		const legal = this.legalEntries();
 		if (legal.length === 0) return;
 		const current = this.focused ? this.entries.get(this.focused) : undefined;
@@ -332,9 +324,7 @@ export const targets = new Targets();
 export function target(el: HTMLElement, def: TargetDef) {
 	let current = def;
 	targets.register(el, def);
-	const onEnter = () => targets.mouseEnter(current.id);
 	const onClick = (e: MouseEvent) => targets.click(current.id, { x: e.clientX, y: e.clientY });
-	el.addEventListener('mouseenter', onEnter);
 	el.addEventListener('click', onClick);
 	return {
 		update(next: TargetDef) {
@@ -348,7 +338,6 @@ export function target(el: HTMLElement, def: TargetDef) {
 		},
 		destroy() {
 			targets.unregister(current.id);
-			el.removeEventListener('mouseenter', onEnter);
 			el.removeEventListener('click', onClick);
 		}
 	};

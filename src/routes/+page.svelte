@@ -306,7 +306,6 @@
 
 <svelte:window
 	onkeydown={onKeydown}
-	onmousemove={() => targets.mouseMoved()}
 	onblur={() => setAway(true)}
 	onfocus={() => setAway(false)}
 />
