@@ -26,7 +26,7 @@ export const gestureConfig = {
 	shakeDeg: 2.5,
 	/** Once someone's gestures are known, they must be this share of their usual speed. Real nods */
 	/** are sharp and aiming around isn't, even though both can be the same size. */
-	personalSpeedShare: 0.45,
+	personalSpeedShare: 0.55,
 	/** The speed needed never goes above this, so a player who starts big can still nod gently. */
 	personalSpeedMax: 24,
 	/** Share of the way back the head must come for the bump to count. */
