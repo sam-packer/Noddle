@@ -17,6 +17,7 @@
 		"gen": "wrangler types",
 		"report": "bun scripts/report.ts",
 		"replay": "bun scripts/replay.ts",
+		"pointer": "bun scripts/pointer.ts",
 		"db:push": "drizzle-kit push",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",

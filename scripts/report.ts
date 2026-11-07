@@ -201,6 +201,52 @@ function findMisses() {
 
 const misses = findMisses();
 
+/** A move at least this big just before a pick counts as big, in degrees. */
+const BIG_MOVE_DEG = 8;
+const AIM_LOOKBACK_MS = 1500;
+const ARRIVED_DEG_S = 15;
+const ARRIVED_SPAN_FRAMES = 4;
+
+/** How well the pointer was on target at each pick, split by how far the head had just moved. */
+function aimSummary() {
+	const middle = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
+	const picks = events.flatMap((e) => {
+		const box = e.e === 'confirm' && e.chose ? e.targets?.find((r: any[]) => r[0] === e.chose) : null;
+		if (!box) return [];
+		const before = frames.filter((f) => f.t >= e.onset - AIM_LOOKBACK_MS && f.t <= e.onset);
+		if (before.length < 5) return [];
+		const range = (k: 'y' | 'p') => Math.max(...before.map((f) => f[k])) - Math.min(...before.map((f) => f[k]));
+		const head = headOf(before[before.length - 1]);
+		const [, l, t, w, h] = box;
+		let arrivedMs = AIM_LOOKBACK_MS;
+		// Measured over a few frames, because tracking noise alone looks fast between two frames.
+		for (let i = before.length - 1; i >= ARRIVED_SPAN_FRAMES; i--) {
+			const [a, b] = [before[i - ARRIVED_SPAN_FRAMES], before[i]];
+			if ((Math.hypot(b.y - a.y, b.p - a.p) / Math.max(b.t - a.t, 1)) * 1000 > ARRIVED_DEG_S) {
+				arrivedMs = e.onset - b.t;
+				break;
+			}
+		}
+		return [
+			{
+				big: Math.hypot(range('y'), range('p')) >= BIG_MOVE_DEG,
+				offCentre: Math.hypot(head.x - l - w / 2, head.y - t - h / 2),
+				outside: nearest([box], head).gap,
+				arrivedMs
+			}
+		];
+	});
+	const line = (name: string, part: typeof picks) =>
+		part.length
+			? `${name}: ${part.length} picks, ${Math.round(middle(part.map((p) => p.offCentre)))}px off centre, ` +
+				`${Math.round(middle(part.map((p) => p.outside)))}px outside the target, ` +
+				`nodded ${Math.round(middle(part.map((p) => p.arrivedMs)))}ms after arriving`
+			: `${name}: no picks`;
+	return [line(`After big moves (${BIG_MOVE_DEG}°+)`, picks.filter((p) => p.big)), line('After small moves', picks.filter((p) => !p.big))];
+}
+
+const aim = aimSummary();
+
 /** What led up to a mistake the player marked. */
 function mistakeContext(mark: Row) {
 	const recent = events.filter(
@@ -225,6 +271,7 @@ console.log(
 	`\nTotals: ${counts.nods} nods, ${counts.shakes} shakes, ${counts.picks} picks, ${counts.missed} nods on nothing, ` +
 		`${counts.rejected} turned down, ${counts.mistakes} marked mistakes`
 );
+console.log(`\nAim at the moment of each pick (median):\n  ${aim.join('\n  ')}`);
 console.log(checks.length ? `\nWorth checking:\n  ${checks.join('\n  ')}` : '\nNothing obviously wrong.');
 const missLines = misses.map(
 	(m) =>
@@ -299,6 +346,7 @@ pre { white-space: pre-wrap; } .red { color: #dc2626; } .blue { color: #2563eb; 
 </style>
 <h1>Session ${esc(basename(path))}</h1>
 <p><b class="red">Pitch</b> · <b class="blue">Yaw</b> · grey is pointer height · <b class="green">green</b> is a nod · <b class="purple">purple</b> is a shake · an orange dot was turned down · an orange ring looked like a gesture but did not count · a thick red line is a marked mistake</p>
+<h2>Aim at the moment of each pick (median)</h2><pre>${esc(aim.join('\n'))}</pre>
 ${checks.length ? `<h2>Worth checking</h2><pre>${esc(checks.join('\n'))}</pre>` : ''}
 ${missLines.length ? `<h2>Looked like a gesture but did not count</h2><pre>${esc(missLines.join('\n'))}</pre>` : ''}
 ${rowsHtml.join('\n')}

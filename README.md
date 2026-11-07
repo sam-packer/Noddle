@@ -62,6 +62,7 @@ Polish here is driven by recordings of real play, so changes can be checked agai
 - **Press `G`** for a guided recording of nods, shakes and normal head movement.
 - **`bun run report`** explains the newest session: a timeline, a list of moments worth checking, every movement that looked like a gesture but didn't count (with the detector's own reason), and a chart saved to `.recordings/reports/`. Pass a file to read an older one.
 - **`bun run replay`** runs the real detector over saved recordings and scores it against `scripts/labels.json`. Run it after any change to `src/lib/vision/gestures.ts`.
+- **`bun run pointer`** measures the pointer's smoothing against recorded head movement: how fast it catches up after a big move, and how much it shakes when still. Settings live in `src/lib/vision/headSmoother.ts`.
 - **`bun run replay --sweep`** tries a range of detector settings against the same labels. Prefer a value in the middle of a wide range over the single best score, because a few games are easy to overfit.
 
 After a session, add what the player meant to do to `scripts/labels.json`, so that mistake stays covered by `bun run replay` from then on. Recordings stay in `.recordings`, which is not committed, and `bun run replay` skips any that aren't there.
