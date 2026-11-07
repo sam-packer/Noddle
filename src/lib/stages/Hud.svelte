@@ -1,9 +1,14 @@
 <script lang="ts">
+	import { target, targets } from '../input/targets.svelte';
 	import { engine, setup, SOURCES, type SourceId } from '../vision/engine.svelte';
 	import { gestureConfig } from '../vision/gestures';
 	import { testLog } from './testlog.svelte';
 
-	let { onTest, onRecord }: { onTest: (train: boolean) => void; onRecord: () => void } = $props();
+	let {
+		onTest,
+		onRecord,
+		onClose
+	}: { onTest: (train: boolean) => void; onRecord: () => void; onClose: () => void } = $props();
 
 	let nodDeg = $state(gestureConfig.nodDeg);
 	let shakeDeg = $state(gestureConfig.shakeDeg);
@@ -62,6 +67,14 @@
 {/each}
 
 <div class="hud">
+	<button
+		use:target={{ id: 'hud-close', legal: true, confirm: onClose }}
+		class="close"
+		class:focused={targets.focused === 'hud-close'}
+	>
+		✕ Close debug
+	</button>
+	<p>While this is open: P menu · R restart · N skip · B test run · G record · K collect · T/Y accuracy · H hand over</p>
 	<button class="record" onclick={onRecord}>Record nods and shakes (G)</button>
 
 	<canvas {@attach (c) => engine.addPreview(c)} width="256" height="144" class="w-full rounded"></canvas>
@@ -186,6 +199,21 @@
 		color: #e2e8f0;
 		font-size: 0.68rem;
 		line-height: 1.15rem;
+	}
+	.close {
+		width: 100%;
+		height: 4rem;
+		margin-bottom: 0.5rem;
+		border-radius: 0.5rem;
+		border: 3px solid #94a3b8;
+		background: #334155;
+		font-size: 1.2rem;
+		font-weight: 800;
+	}
+	.close.focused {
+		box-shadow:
+			0 0 0 3px #fde047,
+			0 0 25px 8px rgb(253 224 71 / 0.75);
 	}
 	.warn {
 		color: #f87171;

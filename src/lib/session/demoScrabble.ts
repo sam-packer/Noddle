@@ -37,7 +37,7 @@ export class DemoScrabbleSession implements GameSession<ScrabbleView, ScrabbleAc
 			status: 'live',
 			rejected: null,
 			ended: null,
-			canLeave: false,
+			canLeave: true,
 			showOpponents: false,
 			canRestart: false
 		});
@@ -70,7 +70,7 @@ export class DemoScrabbleSession implements GameSession<ScrabbleView, ScrabbleAc
 			const text = this.state.last?.kind === 'place'
 				? `${this.state.last.word} for ${this.state.last.score} points!${this.state.last.bingo ? ' That includes the 50 point bingo.' : ''}`
 				: note;
-			this.store.set({ view: this.present(true), ended: { title: 'You did it', text } });
+			this.store.set({ view: this.present(true), ended: { title: 'You did it', text, won: true } });
 		});
 	}
 

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { target, targets } from '../input/targets.svelte';
 	import { engine } from '../vision/engine.svelte';
+	import GameExit from './GameExit.svelte';
 
-	let { onDone }: { onDone: () => void } = $props();
+	let { onDone, onExit }: { onDone: () => void; onExit: () => void } = $props();
 
 	const spots = [
 		{ x: 10, y: 20 },
@@ -13,16 +14,17 @@
 	];
 
 	let step = $state(0);
+	let leaving = $state(false);
 	const finished = $derived(step >= spots.length);
 	/** Fills as the head moves, and is full once the nod is big enough to count. */
 	const nodMeter = $derived(targets.focused ? engine.nodProgress : 0);
 	const needsAim = $derived(!finished && targets.missedNods > 0 && !targets.focused);
 
-	$effect(() => (finished ? targets.claimCancel(onDone) : undefined));
+	$effect(() => (finished && !leaving ? targets.claimCancel(onDone) : undefined));
 </script>
 
 <div class="relative h-full w-full">
-	<div class="absolute top-[8%] left-1/2 w-3/5 -translate-x-1/2 text-center">
+	<div class="absolute top-[8%] left-1/2 w-3/5 -translate-x-1/2 text-center" class:invisible={leaving}>
 		{#if finished}
 			<p class="text-5xl font-bold">A quick shake undoes your last tile</p>
 			<p class="mt-3 text-2xl text-slate-300">Try it, or point at Let's play and nod</p>
@@ -39,7 +41,7 @@
 
 	{#if finished}
 		<button
-			use:target={{ id: 'start', legal: true, confirm: onDone }}
+			use:target={{ id: 'start', legal: !leaving, confirm: onDone }}
 			class="start"
 			class:focused={targets.focused === 'start'}
 		>
@@ -47,11 +49,13 @@
 		</button>
 	{/if}
 
+	<GameExit show bind:leaving {onExit} question="Leave the lesson?" stay="✕ Keep going" bottom />
+
 	{#each spots as spot, i (i)}
 		<button
 			use:target={{
 				id: `spot-${i}`,
-				legal: step === i,
+				legal: step === i && !leaving,
 				calib: true,
 				confirm: () => (step = i + 1)
 			}}

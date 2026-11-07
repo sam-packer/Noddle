@@ -2,8 +2,8 @@
  * Plays real games against a running rooms worker, over real sockets: `bun run dev:rooms`, then
  * `bun run rooms:check`. Pass another address to check a deployed worker.
  *
- * The rules are tested by `bun test`. This proves the parts only a real server can: sockets, seat
- * tokens, reconnecting, bots moving on their own, and that nothing hidden crosses the wire.
+ * This proves the parts only a real server can: sockets, seat tokens, reconnecting, bots moving on
+ * their own, and that nothing hidden crosses the wire.
  */
 const BASE = process.argv[2] ?? 'http://localhost:8787';
 const WS_BASE = BASE.replace(/^http/, 'ws');

@@ -7,16 +7,20 @@
 	import { CARD_MS, type GameSession } from '../session/types';
 	import { target, targets } from '../input/targets.svelte';
 	import { session as log } from '../session';
+	import Confetti from './Confetti.svelte';
 	import GameExit from './GameExit.svelte';
 
 	let {
 		session,
 		onDone,
-		onExit
+		onExit,
+		restartDemo
 	}: {
 		session: GameSession<UnoView, UnoAction>;
 		onDone: () => void;
 		onExit: () => void;
+		/** In the demo, the corner button starts it over instead of leaving. */
+		restartDemo?: () => void;
 	} = $props();
 
 	type Position = 'left' | 'top' | 'right';
@@ -358,10 +362,15 @@
 		<p class="pages">Page {page + 1} of {pageCount}</p>
 	{/if}
 
+	{#if snap.ended?.won}<Confetti />{/if}
+
 	<GameExit
 		show={snap.canLeave && !snap.ended && !pendingWild && !view.legal.keep}
 		bind:leaving
-		{onExit}
+		onExit={restartDemo ?? onExit}
+		question={restartDemo ? 'Restart the demo?' : undefined}
+		label={restartDemo ? 'Restart' : undefined}
+		icon={restartDemo ? '↺' : undefined}
 	/>
 
 	{#if view.legal.keep && !pendingWild && !leaving}

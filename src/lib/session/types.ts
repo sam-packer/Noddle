@@ -1,5 +1,5 @@
 /** A game is over, or the script has finished. With advanceMs, the app moves on by itself. */
-export type Ended = { title: string; text: string; advanceMs?: number };
+export type Ended = { title: string; text: string; advanceMs?: number; won?: boolean };
 
 export type SessionStatus = 'live' | 'connecting' | 'offline';
 

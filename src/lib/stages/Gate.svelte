@@ -17,6 +17,6 @@
 	{:else if !anyInBounds}
 		<p class="text-2xl text-amber-300">Step closer and face the screen</p>
 	{:else}
-		<p class="text-4xl font-semibold text-emerald-300">Nod to take control (or press Enter)</p>
+		<p class="text-4xl font-semibold text-emerald-300">Nod to take control</p>
 	{/if}
 </div>

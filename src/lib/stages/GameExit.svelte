@@ -2,42 +2,59 @@
 	import { target, targets } from '../input/targets.svelte';
 
 	/**
-	 * The way out of a game. Leaving is never one nod away: the button only asks, and the safe answer
-	 * is the one nearer that button, so a head drifting down from it reaches Keep playing first.
+	 * The way out of anything that takes the player back to the menu. Leaving is never one nod away:
+	 * the button only asks, and the safe answer is the one nearer that button, so a head drifting
+	 * down from it reaches the stay answer first.
 	 */
 	let {
 		show,
 		leaving = $bindable(false),
-		onExit
-	}: { show: boolean; leaving?: boolean; onExit: () => void } = $props();
+		onExit,
+		question = 'Leave this game?',
+		stay = '✕ Keep playing',
+		label = 'Leave',
+		icon = '✕',
+		bottom = false
+	}: {
+		show: boolean;
+		leaving?: boolean;
+		onExit: () => void;
+		question?: string;
+		stay?: string;
+		label?: string;
+		icon?: string;
+		/** For a screen with something else in the top corner. */
+		bottom?: boolean;
+	} = $props();
 </script>
 
 {#if show && !leaving}
 	<button
 		use:target={{ id: 'leave', legal: true, confirm: () => (leaving = true) }}
 		class="leave"
+		class:bottom
 		class:focused={targets.focused === 'leave'}
 	>
-		✕<span>Leave</span>
+		{icon}<span>{label}</span>
 	</button>
 {/if}
 
 {#if leaving}
 	<div class="veil"></div>
-	<p class="ask">Leave this game?</p>
+	<p class="ask">{question}</p>
 	<button
 		use:target={{ id: 'leave-no', legal: true, confirm: () => (leaving = false) }}
 		class="answer stay"
 		class:focused={targets.focused === 'leave-no'}
 	>
-		✕ Keep playing
+		{stay}
 	</button>
 	<button
 		use:target={{ id: 'leave-yes', legal: true, confirm: onExit }}
 		class="answer go"
 		class:focused={targets.focused === 'leave-yes'}
 	>
-		Leave
+		{label}
 	</button>
 {/if}
 
@@ -61,6 +78,10 @@
 		font-weight: 800;
 		line-height: 1;
 		transition: transform 90ms ease-out;
+	}
+	.leave.bottom {
+		top: auto;
+		bottom: 1.5rem;
 	}
 	.leave span {
 		margin-top: 0.3rem;

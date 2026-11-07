@@ -7,27 +7,60 @@
 
 	let { onChoose }: { onChoose: (choice: MenuChoice) => void } = $props();
 
+	type Button = { id: string; title: string; text: string; color: string; confirm: () => void };
+
+	let pickingGame = $state(false);
+
 	// In a row across the middle: no neck strain, and far enough apart that a nod can't slide across.
-	const CHOICES: { id: MenuChoice; title: string; text: string; color: string }[] = [
-		{ id: 'uno', title: 'Uno', text: 'Against three bots', color: '#b91c1c' },
-		{ id: 'scrabble', title: 'Scrabble', text: 'Against a bot', color: '#b45309' },
-		{ id: 'multiplayer', title: 'With friends', text: 'Each on their own laptop', color: '#1d4ed8' },
-		{ id: 'demo', title: 'Guided demo', text: 'The quick tour', color: '#334155' }
+	const HOME: Button[] = [
+		{
+			id: 'single',
+			title: 'Single player',
+			text: 'Against bots',
+			color: '#b91c1c',
+			confirm: () => (pickingGame = true)
+		},
+		{
+			id: 'multiplayer',
+			title: 'Multiplayer',
+			text: 'Each on their own laptop',
+			color: '#1d4ed8',
+			confirm: () => onChoose('multiplayer')
+		},
+		{ id: 'demo', title: 'Demo', text: 'The guided tour', color: '#334155', confirm: () => onChoose('demo') }
 	];
+	// Back sits where Single player was, so a second nod by accident doesn't start a game.
+	const GAMES: Button[] = [
+		{
+			id: 'back',
+			title: '✕ Back',
+			text: 'To the menu',
+			color: '#334155',
+			confirm: () => (pickingGame = false)
+		},
+		{ id: 'uno', title: 'Uno', text: 'Against three bots', color: '#b91c1c', confirm: () => onChoose('uno') },
+		{ id: 'scrabble', title: 'Scrabble', text: 'Against a bot', color: '#b45309', confirm: () => onChoose('scrabble') }
+	];
+
+	const buttons = $derived(pickingGame ? GAMES : HOME);
+
+	$effect(() => (pickingGame ? targets.claimCancel(() => (pickingGame = false)) : undefined));
 </script>
 
 <div class="relative h-full w-full">
-	<p class="absolute top-[10%] w-full text-center text-5xl font-bold">What would you like to play?</p>
+	<p class="absolute top-[10%] w-full text-center text-5xl font-bold">
+		{pickingGame ? 'Which game?' : 'What would you like to play?'}
+	</p>
 	<div class="row">
-		{#each CHOICES as choice (choice.id)}
+		{#each buttons as button (button.id)}
 			<button
-				use:target={{ id: `menu-${choice.id}`, legal: true, confirm: () => onChoose(choice.id) }}
+				use:target={{ id: `menu-${button.id}`, legal: true, confirm: button.confirm }}
 				class="choice"
-				class:focused={targets.focused === `menu-${choice.id}`}
-				style:background={choice.color}
+				class:focused={targets.focused === `menu-${button.id}`}
+				style:background={button.color}
 			>
-				<span class="title">{choice.title}</span>
-				<span class="text">{choice.text}</span>
+				<span class="title">{button.title}</span>
+				<span class="text">{button.text}</span>
 			</button>
 		{/each}
 	</div>
@@ -47,7 +80,7 @@
 	.choice {
 		display: flex;
 		height: 44vh;
-		width: 20vw;
+		width: 27vw;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;

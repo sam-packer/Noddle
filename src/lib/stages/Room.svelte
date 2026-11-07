@@ -8,6 +8,7 @@
 	import type { UnoAction, UnoView } from '../games/uno/engine';
 	import { createRoom, RemoteSession, type GameKind, type LobbyState } from '../session/remote';
 	import type { GameSession } from '../session/types';
+	import GameExit from './GameExit.svelte';
 	import Scrabble from './Scrabble.svelte';
 	import Uno from './Uno.svelte';
 
@@ -71,8 +72,10 @@
 		else problem = `Room codes have ${CODE_LENGTH} characters.`;
 	}
 
+	let leavingLobby = $state(false);
+
 	function leave() {
-		replaceState('/?play', {});
+		replaceState('/', {});
 		onExit();
 	}
 
@@ -190,17 +193,11 @@
 			{#if !lobby?.seats.length}<li class="text-slate-400">Connecting…</li>{/if}
 		</ul>
 
-		<button
-			use:target={{ id: 'room-leave', legal: true, confirm: leave }}
-			class="big exit"
-			style="left:6%;top:38%;height:36vh"
-			class:focused={targets.focused === 'room-leave'}
-		>
-			✕ Leave
-		</button>
+		<!-- A small corner button that asks first, because the room button was just under the pointer. -->
+		<GameExit show bind:leaving={leavingLobby} onExit={leave} question="Leave this room?" stay="✕ Stay" />
 		{#if lobby?.isHost}
 			<button
-				use:target={{ id: 'room-start', legal: canStart, confirm: () => remote?.start() }}
+				use:target={{ id: 'room-start', legal: canStart && !leavingLobby, confirm: () => remote?.start() }}
 				class="big"
 				style="right:6%;top:38%;height:36vh;background:#15803d"
 				class:off={!canStart}

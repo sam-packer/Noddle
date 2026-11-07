@@ -3,7 +3,7 @@ import type { UnoAction, UnoView } from '../games/uno/engine';
 import { sortHand } from './localUno';
 import { scrabbleEnded, scrabbleNote, unoEnded, unoNote } from './notes';
 import { SnapshotStore } from './store';
-import { realWait, type GameSession, type Seatless, type SessionStatus, type Wait } from './types';
+import { realWait, type Ended, type GameSession, type Seatless, type SessionStatus, type Wait } from './types';
 
 export type RemoteView = UnoView | ScrabbleView;
 export type RemoteAction = UnoAction | ScrabbleAction;
@@ -243,7 +243,7 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		const over = raw.phase === 'over';
 		const me = raw.me;
 		let note: string;
-		let ended: { title: string; text: string } | null;
+		let ended: Ended | null;
 		let view = raw;
 		if (raw.game === 'uno') {
 			note = unoNote(raw.last, names, me, raw.counts);

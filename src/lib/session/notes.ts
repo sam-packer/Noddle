@@ -38,7 +38,7 @@ export function unoNote(last: LastMove | null, names: string[], me: number, coun
 }
 
 export function unoEnded(winner: number | null, names: string[], me: number) {
-	if (winner === me) return { title: 'You win!', text: 'Nice game.' };
+	if (winner === me) return { title: 'You win!', text: 'Nice game.', won: true };
 	return { title: `${winner === null ? 'Nobody' : names[winner]} wins`, text: 'Good game.' };
 }
 
@@ -55,6 +55,6 @@ export function scrabbleNote(last: ScrabbleLast | null, names: string[], me: num
 export function scrabbleEnded(scores: number[], winner: number | null, names: string[], me: number) {
 	const table = scores.map((score, i) => `${who(i, names, me)} ${score}`).join(', ');
 	if (winner === null) return { title: "It's a tie", text: table };
-	if (winner === me) return { title: 'You win!', text: table };
+	if (winner === me) return { title: 'You win!', text: table, won: true };
 	return { title: `${names[winner]} wins`, text: table };
 }

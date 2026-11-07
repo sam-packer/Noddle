@@ -42,7 +42,7 @@ export class DemoUnoSession implements GameSession<UnoView, UnoAction> {
 			status: 'live',
 			rejected: null,
 			ended: null,
-			canLeave: false,
+			canLeave: true,
 			showOpponents: false,
 			canRestart: false
 		});
@@ -65,7 +65,7 @@ export class DemoUnoSession implements GameSession<UnoView, UnoAction> {
 		this.busy = true;
 		this.store.set({ view: this.present() });
 		if (demoFinished(this.demo)) {
-			this.store.set({ ended: { title: 'UNO!', text: 'One card from winning. Ready for something harder?', advanceMs: UNO_MS } });
+			this.store.set({ ended: { title: 'UNO!', text: 'One card from winning. Ready for something harder?', advanceMs: UNO_MS, won: true } });
 			return;
 		}
 		void this.opponents();

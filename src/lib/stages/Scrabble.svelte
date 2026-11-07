@@ -13,16 +13,18 @@
 	import { session as log } from '../session';
 	import type { GameSession } from '../session/types';
 	import { engine } from '../vision/engine.svelte';
+	import Confetti from './Confetti.svelte';
 	import GameExit from './GameExit.svelte';
 
 	let {
 		session,
 		onExit,
-		exitLabel = '✕ Menu'
+		restartDemo
 	}: {
 		session: GameSession<ScrabbleView, ScrabbleAction>;
 		onExit: () => void;
-		exitLabel?: string;
+		/** In the demo, the corner button and the end of the game start it over. */
+		restartDemo?: () => void;
 	} = $props();
 
 	const PREMIUM_COLOR = { TW: '#b91c1c', DW: '#be7c8c', TL: '#1d4ed8', DL: '#60a5fa' };
@@ -567,7 +569,16 @@
 				✕ {stage === 'zoom' ? 'Zoom out' : 'Put back'}
 			</button>
 			{#if stage === 'done'}
-				{#if snap.canRestart && session.restart}
+				{#if restartDemo}
+					<button
+						use:target={{ id: 'again', legal: endButtons, confirm: restartDemo }}
+						class="action play bg-emerald-700"
+						class:off={!endButtons}
+						class:focused={targets.focused === 'again'}
+					>
+						↺ Restart
+					</button>
+				{:else if snap.canRestart && session.restart}
 					<button
 						use:target={{ id: 'again', legal: endButtons, confirm: () => session.restart?.() }}
 						class="action play bg-emerald-700"
@@ -580,11 +591,11 @@
 				<button
 					use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
 					class="action exit"
-					class:play={!(snap.canRestart && session.restart)}
+					class:play={!restartDemo && !(snap.canRestart && session.restart)}
 					class:off={!endButtons}
 					class:focused={targets.focused === 'menu'}
 				>
-					{exitLabel}
+					✕ Menu
 				</button>
 			{:else}
 				<button
@@ -601,7 +612,16 @@
 
 </div>
 
-<GameExit show={snap.canLeave && stage !== 'done' && stage !== 'blank'} bind:leaving {onExit} />
+{#if snap.ended?.won}<Confetti />{/if}
+
+<GameExit
+	show={snap.canLeave && stage !== 'done' && stage !== 'blank'}
+	bind:leaving
+	onExit={restartDemo ?? onExit}
+	question={restartDemo ? 'Restart the demo?' : undefined}
+	label={restartDemo ? 'Restart' : undefined}
+	icon={restartDemo ? '↺' : undefined}
+/>
 
 {#if stage === 'blank'}
 	<div transition:fade={{ duration: 200 }} class="fixed inset-0 z-[5] bg-black/70"></div>

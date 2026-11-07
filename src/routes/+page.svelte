@@ -22,17 +22,17 @@
 	import { engine, setup, SOURCES } from '../lib/vision/engine.svelte';
 	import { gestureConfig } from '../lib/vision/gestures';
 
-	/** The scripted demo runs through these. It's what opens by default, and never needs a menu. */
-	type DemoStage = 'gate' | 'instructions' | 'uno' | 'scrabble';
-	type Stage = DemoStage | 'menu' | 'play-uno' | 'play-scrabble' | 'room';
-	const ORDER: Stage[] = ['gate', 'instructions', 'uno', 'scrabble'];
+	type Stage = 'gate' | 'instructions' | 'menu' | 'uno' | 'scrabble' | 'play-uno' | 'play-scrabble' | 'room';
 
-	const params = new URLSearchParams(location.search);
+	/** Leave the game, open tools or change the controls, so they only work with the debug panel open. */
+	const DEBUG_KEYS = 'prnbgktyxvh1230`';
+
 	/** Asks to join a room, from a shared link. */
-	const roomLink = params.get('room')?.toUpperCase() ?? null;
-	/** Where to go after the instructions, instead of carrying on with the demo. */
-	let afterInstructions = $state<Stage | null>(roomLink ? 'room' : params.has('play') ? 'menu' : null);
+	const roomLink = new URLSearchParams(location.search).get('room')?.toUpperCase() ?? null;
 	let roomRequest = $state<{ join: string } | null>(roomLink ? { join: roomLink } : null);
+	/** The instructions run once, before whatever the player opens first. */
+	let taught = false;
+	let afterInstructions: MenuChoice = 'multiplayer';
 
 	let stage = $state<Stage>('gate');
 	let localUno = $state<GameSession<UnoView, UnoAction> | null>(null);
@@ -82,16 +82,15 @@
 	}
 
 	function next() {
-		if (stage === 'gate' && returningToRoom()) {
-			stage = 'room';
-			return;
+		if (stage === 'gate') {
+			if (!roomRequest) stage = 'menu';
+			else stage = returningToRoom() ? 'room' : 'instructions';
+		} else if (stage === 'instructions') {
+			taught = true;
+			open(afterInstructions);
+		} else if (stage === 'uno') {
+			stage = 'scrabble';
 		}
-		if (stage === 'instructions' && afterInstructions) {
-			stage = afterInstructions;
-			return;
-		}
-		const i = ORDER.indexOf(stage);
-		if (i >= 0 && i < ORDER.length - 1) stage = ORDER[i + 1];
 	}
 
 	function closeLocalGames() {
@@ -109,10 +108,18 @@
 
 	function chooseFromMenu(choice: MenuChoice) {
 		session.event('menu', { choice });
+		if (taught) {
+			open(choice);
+		} else {
+			afterInstructions = choice;
+			stage = 'instructions';
+		}
+	}
+
+	function open(choice: MenuChoice) {
 		closeLocalGames();
 		switch (choice) {
 			case 'demo':
-				afterInstructions = null;
 				stage = 'uno';
 				break;
 			case 'uno':
@@ -124,10 +131,16 @@
 				stage = 'play-scrabble';
 				break;
 			case 'multiplayer':
-				roomRequest = null;
 				stage = 'room';
 				break;
 		}
+	}
+
+	/** Back to the first screen of the demo, the lesson, ready for the next person. */
+	function restartDemo() {
+		session.event('menu', { choice: 'demo-restart' });
+		afterInstructions = 'demo';
+		stage = 'instructions';
 	}
 
 	function markMistake() {
@@ -144,12 +157,14 @@
 
 	function startRecording() {
 		engine.lockFirst();
+		hud = false;
 		recording = true;
 	}
 
 	function handoff() {
 		closeLocalGames();
 		engine.release();
+		taught = false;
 		stage = 'gate';
 	}
 
@@ -175,6 +190,7 @@
 	function onKeydown(e: KeyboardEvent) {
 		const el = e.target as HTMLElement;
 		if (el.tagName === 'INPUT' || collecting) return;
+		if (!hud && DEBUG_KEYS.includes(e.key)) return;
 		switch (e.key) {
 			case 'ArrowLeft':
 				targets.move(-1, 0);
@@ -197,6 +213,7 @@
 				break;
 			case 'b':
 				engine.lockFirst();
+				hud = false;
 				testRun = true;
 				break;
 			case 'm':
@@ -207,6 +224,7 @@
 				break;
 			case 'k':
 				engine.lockFirst();
+				hud = false;
 				collecting = true;
 				break;
 			case 'x':
@@ -222,9 +240,11 @@
 				hud = !hud;
 				break;
 			case 't':
+				hud = false;
 				test = { train: false };
 				break;
 			case 'y':
+				hud = false;
 				test = { train: true };
 				break;
 			case 'n':
@@ -238,7 +258,7 @@
 				handoff();
 				break;
 			case 'r':
-				// Back to the demo from anywhere, even if a room or the menu changed the address.
+				// Back to the start from anywhere, even if a room changed the address.
 				location.assign('/');
 				break;
 			case 'f':
@@ -282,11 +302,11 @@
 	{:else if stage === 'gate'}
 		<Gate />
 	{:else if stage === 'instructions'}
-		<Instructions onDone={next} />
+		<Instructions onDone={next} onExit={toMenu} />
 	{:else if stage === 'uno' && demoUno}
-		<Uno session={demoUno} onDone={next} onExit={toMenu} />
+		<Uno session={demoUno} onDone={next} onExit={toMenu} {restartDemo} />
 	{:else if stage === 'scrabble' && demoScrabble}
-		<Scrabble session={demoScrabble} onExit={toMenu} exitLabel="Play a real game" />
+		<Scrabble session={demoScrabble} onExit={toMenu} {restartDemo} />
 	{:else if stage === 'menu'}
 		<Menu onChoose={chooseFromMenu} />
 	{:else if stage === 'play-uno' && localUno}
@@ -315,10 +335,6 @@
 	></div>
 {/if}
 
-{#if !hud}
-	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">P play · B test run · M marks a mistake · C recentres · D debug</p>
-{/if}
-
 {#if away}
 	<p class="fixed inset-x-0 top-0 z-[70] bg-sky-700 py-3 text-center text-2xl font-bold text-white">
 		Paused while you're away. Click back to keep playing.
@@ -330,7 +346,7 @@
 {/if}
 
 {#if hud}
-	<Hud onTest={(train) => (test = { train })} onRecord={startRecording} />
+	<Hud onTest={(train) => (test = { train })} onRecord={startRecording} onClose={() => (hud = false)} />
 {/if}
 
 {#if collecting}

@@ -151,8 +151,14 @@
 	}
 
 	const releaseCancel = targets.claimCancel(() => {
-		if (trial?.kind === 'shake') finish('hit', null);
+		if (finished) onClose();
+		else if (trial?.kind === 'shake') finish('hit', null);
 	});
+
+	function leave() {
+		session.event('benchmarkLeft', { n: index });
+		onClose();
+	}
 
 	onMount(() => {
 		session.event('benchmarkStart', { trials: trials.length });
@@ -189,8 +195,22 @@
 		<div class="absolute inset-0 flex flex-col items-center justify-center gap-6">
 			<p class="text-5xl font-bold text-emerald-300">{hits} of {trials.length} went as asked</p>
 			<p class="text-2xl text-slate-300">Saved. Tell Claude it is done.</p>
-			<button class="rounded-lg bg-slate-700 px-6 py-3 text-xl" onclick={onClose}>Close</button>
+			<button
+				use:target={{ id: 'bench-close', legal: true, confirm: onClose }}
+				class="close"
+				class:focused={targets.focused === 'bench-close'}
+			>
+				Close
+			</button>
 		</div>
+	{:else}
+		<button
+			use:target={{ id: 'bench-leave', legal: true, confirm: leave }}
+			class="leave"
+			class:focused={targets.focused === 'bench-leave'}
+		>
+			✕<span>Leave</span>
+		</button>
 	{/if}
 
 	{#each rects as r (r.id)}
@@ -224,6 +244,36 @@
 </div>
 
 <style>
+	.close {
+		height: 6rem;
+		width: 22rem;
+		border-radius: 1rem;
+		border: 4px solid #94a3b8;
+		background: #334155;
+		font-size: 2rem;
+		font-weight: 800;
+	}
+	.leave {
+		position: absolute;
+		right: 2rem;
+		top: 1.5rem;
+		display: flex;
+		height: 6rem;
+		width: 7rem;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		border-radius: 1rem;
+		border: 4px solid #94a3b8;
+		background: #334155;
+		font-size: 2rem;
+		font-weight: 800;
+		line-height: 1;
+	}
+	.leave span {
+		margin-top: 0.3rem;
+		font-size: 1rem;
+	}
 	.piece {
 		position: absolute;
 		border-radius: 0.5rem;
