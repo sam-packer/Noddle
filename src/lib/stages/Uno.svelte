@@ -1,35 +1,51 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { crossfade, fade, fly, scale } from 'svelte/transition';
+	import type { Card as EngineCard, Color, PlayedCard, UnoAction, UnoView } from '../games/uno/engine';
+	import { CARD_MS, type GameSession } from '../session/types';
 	import { target, targets } from '../input/targets.svelte';
-	import { session } from '../session';
+	import { session as log } from '../session';
+	import GameExit from './GameExit.svelte';
 
-	let { onDone }: { onDone: () => void } = $props();
+	let {
+		session,
+		onDone,
+		onExit
+	}: {
+		session: GameSession<UnoView, UnoAction>;
+		onDone: () => void;
+		onExit: () => void;
+	} = $props();
 
-	type Color = 'red' | 'blue' | 'green' | 'yellow' | 'wild';
-	type Seat = 'left' | 'top' | 'right';
-	type Card = {
-		id: number;
-		color: Color;
-		value: string;
-		/** Where it came from, so it can animate from there. */
-		from?: Seat | 'hand' | 'deck';
-		/** The color a Wild was turned into. */
-		shown?: Color;
+	type Position = 'left' | 'top' | 'right';
+	type Card = EngineCard & { shown?: Color; by?: number | null };
+
+	/** Where each other seat sits, going round the table from this player. */
+	const POSITIONS: Record<number, Position[]> = {
+		2: ['top'],
+		3: ['left', 'right'],
+		4: ['left', 'top', 'right']
 	};
-
-	const SEATS: Seat[] = ['left', 'top', 'right'];
-	const NAMES: Record<Seat, string> = { left: 'Ana', top: 'Ben', right: 'Cy' };
-	const COLORS: Record<Color, string> = {
+	const COLORS: Record<Color | 'wild', string> = {
 		red: '#dc2626',
 		blue: '#2563eb',
 		green: '#16a34a',
 		yellow: '#eab308',
 		wild: '#111827'
 	};
-	const CARD_MS = 450;
+	const LABELS: Partial<Record<EngineCard['value'], string>> = {
+		skip: '⊘',
+		reverse: '⇄',
+		draw2: '+2',
+		wild: 'W',
+		wild4: '+4'
+	};
+	/** The most cards that fit in a row at their full size. A longer hand is paged. */
+	const PAGE_SIZE = 7;
+	/** A stray nod just after the game ends must not choose what happens next. */
+	const END_BUTTONS_DELAY_MS = 1500;
 
 	const [send, receive] = crossfade({
 		duration: CARD_MS,
@@ -37,156 +53,161 @@
 		fallback: (node) => scale(node, { start: 0.7, duration: 250 })
 	});
 
-	// No green in the hand, so a green top card later makes the Wild the only play.
-	// Only the ends of the hand match the first top card, so legal cards sit far apart.
-	let hand = $state<Card[]>([
-		{ id: 1, color: 'red', value: '3' },
-		{ id: 2, color: 'blue', value: '7' },
-		{ id: 3, color: 'yellow', value: '5' },
-		{ id: 4, color: 'wild', value: 'W' },
-		{ id: 5, color: 'yellow', value: '2' },
-		{ id: 6, color: 'yellow', value: '9' },
-		{ id: 7, color: 'blue', value: '4' }
-	]);
-	let discard = $state<Card[]>([{ id: 0, color: 'red', value: '4', from: 'deck' }]);
-	let turn = $state(0);
-	let phase = $state<'play' | 'opponents' | 'pick' | 'uno'>('play');
-	let activeSeat = $state<Seat | null>(null);
-	let seatNote = $state('');
-	let counts = $state<Record<Seat, number>>({ left: 7, top: 7, right: 7 });
-	let nextId = 100;
+	const snap = $derived($session);
+	let lastRejected: typeof snap.rejected = null;
+	const view = $derived(snap.view);
+	const me = $derived(view.me);
 
-	const drawQueue: { color: Color; value: string }[] = [
-		{ color: 'red', value: '6' },
-		{ color: 'blue', value: '1' },
-		{ color: 'yellow', value: '8' }
-	];
+	/** A Wild waiting for its colour. It only becomes a real move once one is chosen. */
+	let pendingWild = $state<EngineCard | null>(null);
+	/** Its colour, once chosen. The card stays on the pile until the session confirms the move. */
+	let pendingColor = $state<Color | null>(null);
+	let leaving = $state(false);
+	let page = $state(0);
+	let endButtons = $state(false);
 
-	const top = $derived(discard[discard.length - 1]);
-	const topColor = $derived(top.shown ?? top.color);
+	const seats = $derived(
+		(POSITIONS[view.players] ?? []).map((position, i) => ({
+			position,
+			seat: (me + i + 1) % view.players
+		}))
+	);
+	const hand = $derived(view.hand.filter((c) => c.id !== pendingWild?.id));
+	const pageCount = $derived(Math.max(1, Math.ceil(hand.length / PAGE_SIZE)));
+	const shown = $derived(hand.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
+	const discard = $derived<Card[]>(
+		pendingWild && !view.discard.some((c) => c.id === pendingWild?.id)
+			? [...view.discard, { ...pendingWild, by: me, shown: pendingColor ?? undefined }]
+			: view.discard
+	);
+	const top = $derived(view.discard[view.discard.length - 1]);
+	const glow = $derived(discard[discard.length - 1]);
+	const glowColor = $derived(glow.shown ?? glow.color);
+	const picking = $derived(pendingWild !== null && pendingColor === null);
+	const myMove = $derived(
+		!pendingWild && !snap.ended && (view.legal.cards.length > 0 || view.legal.draw || view.legal.keep)
+	);
+	const pageOf = (id: number) => Math.floor(hand.findIndex((c) => c.id === id) / PAGE_SIZE);
+	const legalPages = $derived(
+		view.legal.cards.filter((id) => hand.some((c) => c.id === id)).map(pageOf)
+	);
+	const legalBefore = $derived(legalPages.filter((p) => p < page).length);
+	const legalAfter = $derived(legalPages.filter((p) => p > page).length);
+	const legalKey = $derived(`${view.legal.cards.join()}|${view.drawnId}`);
+	const activeName = $derived(snap.active === null ? null : snap.names[snap.active]);
 
-	// What the player could see, so the session log says what they were trying to do.
 	$effect(() => {
-		session.event('game', {
-			game: 'uno',
-			phase,
-			top: `${topColor} ${top.value}`,
-			hand: hand.map((c) => `${c.id}:${c.color} ${c.value}`)
+		if (page >= pageCount) page = pageCount - 1;
+	});
+
+	// When the options change, open on a page with a move on it. After that the page is the
+	// player's to change, even to look at cards they can't play.
+	$effect(() => {
+		void legalKey;
+		untrack(() => {
+			if (view.drawnId !== null && hand.some((c) => c.id === view.drawnId)) {
+				page = pageOf(view.drawnId);
+			} else if (legalPages.length && !legalPages.includes(page)) {
+				page = legalPages[0];
+			}
 		});
 	});
 
-	const timers: ReturnType<typeof setTimeout>[] = [];
-	function wait(ms: number) {
-		return new Promise<void>((resolve) => {
-			timers.push(setTimeout(resolve, ms));
+	// Once the session has answered, the waiting Wild has either landed or been refused.
+	$effect(() => {
+		void snap.rejected;
+		if (pendingColor === null) return;
+		const held = view.hand.some((c) => c.id === pendingWild?.id);
+		if (!held || untrack(() => lastRejected !== snap.rejected)) {
+			pendingWild = null;
+			pendingColor = null;
+		}
+		lastRejected = snap.rejected;
+	});
+
+	// What the player could see, so the session log says what they were trying to do.
+	$effect(() => {
+		const color = top.shown ?? top.color;
+		log.event('game', {
+			game: 'uno',
+			phase: picking ? 'pick' : snap.ended ? 'uno' : myMove ? 'play' : 'opponents',
+			top: `${color} ${top.value}`,
+			hand: view.hand.map((c) => `${c.id}:${c.color} ${c.value}`),
+			page,
+			counts: view.counts,
+			current: view.current,
+			note: snap.note
 		});
+	});
+
+	$effect(() => {
+		if (snap.rejected) log.event('rejected', { reason: snap.rejected.reason });
+	});
+
+	// A scripted ending moves on by itself. A real one waits for the player to choose.
+	$effect(() => {
+		const ended = snap.ended;
+		if (!ended) {
+			endButtons = false;
+			return;
+		}
+		const delay = ended.advanceMs ?? END_BUTTONS_DELAY_MS;
+		const timer = setTimeout(() => {
+			if (ended.advanceMs !== undefined) onDone();
+			else endButtons = true;
+		}, delay);
+		return () => clearTimeout(timer);
+	});
+
+	function play(card: EngineCard) {
+		if (card.color === 'wild') {
+			pendingWild = card;
+			return;
+		}
+		session.send({ type: 'play', cardId: card.id });
+	}
+
+	function chooseColor(color: Color) {
+		lastRejected = snap.rejected;
+		pendingColor = color;
+		session.send({ type: 'play', cardId: pendingWild!.id, color });
 	}
 
 	/** Takes a played Wild back, from the close button on the color picker. */
 	function takeBackWild() {
-		const wild = discard.pop();
-		if (wild) hand.splice(3, 0, { id: wild.id, color: 'wild', value: 'W' });
-		phase = 'play';
+		pendingWild = null;
 	}
 
-	onDestroy(() => {
-		for (const t of timers) clearTimeout(t);
+	/** Cards this player already held, so only a newly drawn one flies in from the pile. */
+	const known = new Set<number>();
+	let arriving = new Set<number>();
+	$effect.pre(() => {
+		const ids = view.hand.map((c) => c.id);
+		arriving = new Set(ids.filter((id) => !known.has(id)));
+		for (const id of ids) known.add(id);
 	});
 
-	function isLegal(card: Card) {
-		if (phase !== 'play') return false;
-		// The script holds the Wild back until its turn, to keep the targets few and far apart.
-		if (card.color === 'wild') return turn === 2;
-		return card.color === topColor || card.value === top.value;
-	}
-
-	/** Sets up the next turn so the playable cards sit at opposite ends of the hand. */
-	function nextTop(): { color: Color; value: string } {
-		if (turn === 2 && hand.some((c) => c.color === 'wild')) return { color: 'green', value: '8' };
-		const plain = hand.filter((c) => c.color !== 'wild');
-		if (plain.length === 0) return { color: topColor, value: top.value };
-		return { color: plain[0].color, value: plain[plain.length - 1].value };
-	}
-
-	function opponentPlays(seat: Seat, card: { color: Color; value: string }) {
-		discard.push({ id: nextId++, ...card, from: seat });
-		if (discard.length > 4) discard.shift();
-		counts[seat] -= 1;
-	}
-
-	/** Two opponents play and one draws. Each play is legal, and the last sets up the next turn. */
-	async function opponents() {
-		phase = 'opponents';
-		turn += 1;
-		const goal = nextTop();
-		const drawer = SEATS[turn % 3];
-		const plays = [
-			{ color: topColor, value: goal.value },
-			{ color: goal.color, value: goal.value }
-		];
-		for (const seat of SEATS) {
-			activeSeat = seat;
-			await wait(350);
-			if (seat === drawer) {
-				counts[seat] += 1;
-				seatNote = `${NAMES[seat]} draws`;
-			} else {
-				opponentPlays(seat, plays.shift()!);
-				seatNote = '';
-			}
-			await wait(CARD_MS + 150);
-		}
-		activeSeat = null;
-		seatNote = '';
-		phase = 'play';
-	}
-
-	function afterPlay() {
-		if (hand.length === 1) {
-			phase = 'uno';
-			wait(3500).then(onDone);
-		} else {
-			wait(CARD_MS).then(opponents);
-		}
-	}
-
-	function play(card: Card) {
-		hand = hand.filter((c) => c.id !== card.id);
-		discard.push({ ...card, from: 'hand' });
-		if (discard.length > 4) discard.shift();
-		if (card.color === 'wild') {
-			phase = 'pick';
-			return;
-		}
-		afterPlay();
-	}
-
-	function chooseColor(color: Color) {
-		discard[discard.length - 1].shown = color;
-		afterPlay();
-	}
-
-	function draw() {
-		const next = drawQueue.shift() ?? { color: 'red' as Color, value: '1' };
-		hand.push({ id: nextId++, ...next, from: 'deck' });
-		wait(CARD_MS).then(opponents);
+	function positionOf(by: number | null | undefined) {
+		return seats.find((s) => s.seat === by)?.position ?? null;
 	}
 
 	/** Every card arrives from where it really came from. */
 	function arrive(node: Element, { card }: { card: Card }) {
-		if (card.from === 'hand') return receive(node, { key: card.id });
-		const offset = {
-			left: { x: -innerWidth * 0.42, y: 0 },
-			top: { x: 0, y: -innerHeight * 0.3 },
-			right: { x: innerWidth * 0.42, y: 0 },
-			deck: { x: 0, y: 0 }
-		}[card.from ?? 'deck'];
+		if (card.by === me) return receive(node, { key: card.id });
+		const position = positionOf(card.by);
+		const offset = position
+			? {
+					left: { x: -innerWidth * 0.42, y: 0 },
+					top: { x: 0, y: -innerHeight * 0.3 },
+					right: { x: innerWidth * 0.42, y: 0 }
+				}[position]
+			: { x: 0, y: 0 };
 		return fly(node, { ...offset, opacity: 1, duration: CARD_MS, easing: cubicOut });
 	}
 
 	/** A drawn card flies from the pile, top left, down to the hand. */
 	function dealt(node: Element, { card }: { card: Card }) {
-		if (card.from !== 'deck') return { duration: 0 };
+		if (!arriving.has(card.id)) return { duration: 0 };
 		return fly(node, {
 			x: -innerWidth * 0.45,
 			y: -innerHeight * 0.45,
@@ -205,44 +226,56 @@
 	];
 
 	const rotation = (id: number) => ((id * 37) % 13) - 6;
+	const label = (card: EngineCard) => LABELS[card.value] ?? card.value;
+	const isPlayedWild = (card: Card) => card.color === 'wild' && !card.shown;
 </script>
 
 {#snippet face(card: Card)}
-	<span class="corner tl">{card.value}</span>
-	<span class="oval" class:wild-oval={card.color === 'wild' && !card.shown}>
+	<span class="corner tl">{label(card)}</span>
+	<span class="oval" class:wild-oval={isPlayedWild(card)}>
 		<span style:color={card.color === 'wild' ? 'white' : COLORS[card.shown ?? card.color]}>
-			{card.value}
+			{label(card)}
 		</span>
 	</span>
-	<span class="corner br">{card.value}</span>
+	<span class="corner br">{label(card)}</span>
 {/snippet}
 
-{#snippet seat(s: Seat)}
-	<div class="seat" class:active={activeSeat === s}>
+{#snippet seat(s: number)}
+	<div class="seat" class:active={snap.active === s}>
 		<div class="backs">
-			{#each { length: Math.min(counts[s], 5) } as _, i (i)}
+			{#each { length: Math.min(view.counts[s], 5) } as _, i (i)}
 				<div class="back" style:transform="translateX({i * 10}px) rotate({i * 3 - 6}deg)"></div>
 			{/each}
 		</div>
-		<span class="name">{NAMES[s]} · {counts[s]}</span>
+		<span class="name">{snap.names[s]} · {view.counts[s]}{view.counts[s] === 1 ? ' · UNO!' : ''}</span>
 	</div>
 {/snippet}
 
 <div class="relative h-full w-full">
 	<button
-		use:target={{ id: 'draw', legal: phase === 'play', confirm: draw }}
+		use:target={{
+			id: 'draw',
+			legal: view.legal.draw && !pendingWild && !leaving,
+			confirm: () => session.send({ type: 'draw' })
+		}}
 		class="uno-card pile"
 		class:focused={targets.focused === 'draw'}
-		class:off={phase !== 'play'}
+		class:off={!view.legal.draw || !!pendingWild}
 	>
 		Draw
 	</button>
 
-	<div class="absolute top-[40%] left-5 -translate-y-1/2">{@render seat('left')}</div>
-	<div class="absolute top-3 left-1/2 -translate-x-1/2">{@render seat('top')}</div>
-	<div class="absolute top-[40%] right-5 -translate-y-1/2">{@render seat('right')}</div>
+	{#each seats as s (s.seat)}
+		{#if s.position === 'left'}
+			<div class="absolute top-[40%] left-5 -translate-y-1/2">{@render seat(s.seat)}</div>
+		{:else if s.position === 'top'}
+			<div class="absolute top-3 left-1/2 -translate-x-1/2">{@render seat(s.seat)}</div>
+		{:else}
+			<div class="absolute top-[40%] right-5 -translate-y-1/2">{@render seat(s.seat)}</div>
+		{/if}
+	{/each}
 
-	<div class="discard" style:--glow={COLORS[topColor]}>
+	<div class="discard" style:--glow={COLORS[glowColor]}>
 		{#each discard as card (card.id)}
 			<div
 				in:arrive={{ card }}
@@ -256,28 +289,33 @@
 	</div>
 
 	<div class="status">
-		{#if phase === 'play'}
-			<p>Point your head at a bright card, then nod to play it</p>
-		{:else if phase === 'opponents'}
-			<p class="text-slate-300">
-				{seatNote || (activeSeat ? `${NAMES[activeSeat]} is playing` : 'Nice')}
-			</p>
-		{:else if phase === 'uno'}
+		{#if snap.ended?.advanceMs !== undefined}
 			<div in:scale={{ start: 0.5, duration: 350 }}>
-				<p class="uno-call">UNO!</p>
-				<p>One card from winning. Ready for something harder?</p>
+				<p class="uno-call">{snap.ended.title}</p>
+				<p>{snap.ended.text}</p>
 			</div>
+		{:else if myMove}
+			{#if snap.note}<p class="note">{snap.note}</p>{/if}
+			{#if view.legal.keep}
+				<p>You can play the card you drew, or point at Keep and nod</p>
+			{:else if view.legal.cards.length}
+				<p>Point your head at a bright card, then nod to play it</p>
+			{:else}
+				<p>Nothing to play. Point at Draw and nod</p>
+			{/if}
+		{:else if !pendingWild && !snap.ended}
+			<p class="text-slate-300">{snap.note || (activeName ? `${activeName} is playing` : 'Nice')}</p>
 		{/if}
 	</div>
 
 	<div class="hand">
-		{#each hand as card (card.id)}
-			{@const legal = isLegal(card)}
+		{#each shown as card (card.id)}
+			{@const legal = view.legal.cards.includes(card.id) && !pendingWild}
 			<button
 				animate:flip={{ duration: 300 }}
 				in:dealt={{ card }}
 				out:send={{ key: card.id }}
-				use:target={{ id: `card-${card.id}`, legal, calib: true, confirm: () => play(card) }}
+				use:target={{ id: `card-${card.id}`, legal: legal && !leaving, calib: true, confirm: () => play(card) }}
 				class="uno-card"
 				class:dim={!legal}
 				class:focused={targets.focused === `card-${card.id}`}
@@ -288,14 +326,62 @@
 		{/each}
 	</div>
 
-	{#if phase === 'pick'}
+	<!-- Large arrows at the far ends, so a long hand never has to shrink its cards to fit. -->
+	{#if pageCount > 1}
+		<button
+			use:target={{
+				id: 'page-back',
+				legal: page > 0 && !pendingWild && !leaving,
+				confirm: () => (page -= 1)
+			}}
+			class="arrow"
+			style="left:0.75rem"
+			class:gone={page === 0}
+			class:focused={targets.focused === 'page-back'}
+		>
+			‹{#if legalBefore}<small>{legalBefore} to play</small>{/if}
+		</button>
+		<button
+			use:target={{
+				id: 'page-next',
+				legal: page < pageCount - 1 && !pendingWild && !leaving,
+				confirm: () => (page += 1)
+			}}
+			class="arrow"
+			style="right:0.75rem"
+			class:gone={page === pageCount - 1}
+			class:focused={targets.focused === 'page-next'}
+		>
+			›{#if legalAfter}<small>{legalAfter} to play</small>{/if}
+		</button>
+		<p class="pages">Page {page + 1} of {pageCount}</p>
+	{/if}
+
+	<GameExit
+		show={snap.canLeave && !snap.ended && !pendingWild && !view.legal.keep}
+		bind:leaving
+		{onExit}
+	/>
+
+	{#if view.legal.keep && !pendingWild && !leaving}
+		<button
+			transition:fade={{ duration: 200 }}
+			use:target={{ id: 'keep', legal: true, confirm: () => session.send({ type: 'pass' }) }}
+			class="close-picker keep"
+			class:focused={targets.focused === 'keep'}
+		>
+			Keep<span>End your turn</span>
+		</button>
+	{/if}
+
+	{#if picking}
 		<div transition:fade={{ duration: 200 }} class="pointer-events-none absolute inset-0 bg-black/60"></div>
-		<p class="absolute top-[8%] z-[5] w-full text-center text-5xl font-bold">
+		<p class="pointer-events-none absolute top-[8%] z-[5] w-full text-center text-5xl font-bold">
 			Point at a color and nod
 		</p>
 		<button
 			transition:fade={{ duration: 200 }}
-			use:target={{ id: 'pick-close', legal: true, confirm: takeBackWild }}
+			use:target={{ id: 'pick-close', legal: !leaving, confirm: takeBackWild }}
 			class="close-picker"
 			class:focused={targets.focused === 'pick-close'}
 		>
@@ -304,13 +390,41 @@
 		{#each corners as c (c.color)}
 			<button
 				transition:fade={{ duration: 200 }}
-				use:target={{ id: `pick-${c.color}`, legal: true, calib: true, confirm: () => chooseColor(c.color) }}
+				use:target={{ id: `pick-${c.color}`, legal: !leaving, calib: true, confirm: () => chooseColor(c.color) }}
 				class="picker"
 				class:focused={targets.focused === `pick-${c.color}`}
 				style="{c.style};background:{COLORS[c.color]}"
 				aria-label={c.color}
 			></button>
 		{/each}
+	{/if}
+
+	{#if snap.ended && snap.ended.advanceMs === undefined}
+		<div in:fade={{ duration: 250 }} class="pointer-events-none absolute inset-0 z-[5] bg-black/70"></div>
+		<div class="end-title" in:scale={{ start: 0.5, duration: 350 }}>
+			<p class="uno-call">{snap.ended.title}</p>
+			<p class="text-2xl">{snap.ended.text}</p>
+		</div>
+		{#if snap.canRestart && session.restart}
+			<button
+				use:target={{ id: 'again', legal: endButtons, confirm: () => session.restart?.() }}
+				class="end-choice"
+				style="left:14%;background:#15803d"
+				class:off={!endButtons}
+				class:focused={targets.focused === 'again'}
+			>
+				Play again
+			</button>
+		{/if}
+		<button
+			use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
+			class="end-choice"
+			style="right:14%;background:#334155"
+			class:off={!endButtons}
+			class:focused={targets.focused === 'menu'}
+		>
+			✕ Menu
+		</button>
 	{/if}
 </div>
 
@@ -487,6 +601,75 @@
 	.close-picker span {
 		margin-top: 0.4rem;
 		font-size: 1.2rem;
+	}
+	.keep {
+		background: #15803d;
+		font-size: 2.2rem;
+	}
+	.note {
+		color: #cbd5e1;
+		font-size: 1.4rem;
+	}
+	.arrow {
+		position: absolute;
+		top: 54%;
+		display: flex;
+		height: 10.5rem;
+		width: 6.5rem;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		border-radius: 0.9rem;
+		border: 5px solid white;
+		background: #334155;
+		color: white;
+		font-size: 4.5rem;
+		font-weight: 800;
+		line-height: 1;
+		transition:
+			transform 90ms ease-out,
+			box-shadow 120ms;
+	}
+	.arrow small {
+		margin-top: 0.5rem;
+		font-size: 1rem;
+		font-weight: 700;
+		color: #fde047;
+	}
+	.gone {
+		visibility: hidden;
+	}
+	.pages {
+		position: absolute;
+		left: 0;
+		top: 51%;
+		width: 100%;
+		text-align: center;
+		font-size: 1.1rem;
+		font-weight: 600;
+		color: #94a3b8;
+	}
+	.end-title {
+		position: absolute;
+		left: 0;
+		top: 7%;
+		z-index: 6;
+		width: 100%;
+		text-align: center;
+	}
+	.end-choice {
+		position: absolute;
+		top: 34%;
+		z-index: 6;
+		height: 36vh;
+		width: 28vw;
+		border-radius: 1.2rem;
+		border: 6px solid white;
+		font-size: 2.6rem;
+		font-weight: 800;
+		transition:
+			transform 90ms ease-out,
+			opacity 200ms;
 	}
 	.picker.focused {
 		transform: none;

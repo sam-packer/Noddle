@@ -5,7 +5,8 @@
 		"types": [
 			"$app/types",
 			"./worker-configuration.d.ts",
-			"node"
+			"node",
+			"bun"
 		]
 	},
 	"include": [

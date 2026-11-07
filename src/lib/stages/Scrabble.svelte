@@ -1,60 +1,73 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
 	import { smoothPointer } from '../input/smoothPointer.svelte';
 	import { target, targets, type ConfirmContext } from '../input/targets.svelte';
-	import { session } from '../session';
+	import {
+		premiumAt as premium,
+		SIZE,
+		tileValue,
+		type ScrabbleAction,
+		type ScrabbleView
+	} from '../games/scrabble/engine';
+	import { session as log } from '../session';
+	import type { GameSession } from '../session/types';
 	import { engine } from '../vision/engine.svelte';
+	import GameExit from './GameExit.svelte';
 
-	const SIZE = 15;
-	const VALUES: Record<string, number> = {
-		A: 1, B: 3, C: 3, D: 2, E: 1, F: 4, G: 2, H: 4, I: 1, J: 8, K: 5, L: 1, M: 3,
-		N: 1, O: 1, P: 3, Q: 10, R: 1, S: 1, T: 1, U: 1, V: 4, W: 4, X: 8, Y: 4, Z: 10
-	};
-
-	function premium(r: number, c: number): 'TW' | 'DW' | 'TL' | 'DL' | null {
-		const a = Math.min(r, 14 - r);
-		const b = Math.min(c, 14 - c);
-		const [p, q] = a < b ? [a, b] : [b, a];
-		if ((p === 0 && q === 0) || (p === 0 && q === 7)) return 'TW';
-		if (p === q && p >= 1 && p <= 4) return 'DW';
-		if (p === 7 && q === 7) return 'DW';
-		if ((p === 1 && q === 5) || (p === 5 && q === 5)) return 'TL';
-		if ((p === 0 && q === 3) || (p === 2 && q === 6) || (p === 3 && q === 7) || (p === 6 && q === 6))
-			return 'DL';
-		return null;
-	}
+	let {
+		session,
+		onExit,
+		exitLabel = '✕ Menu'
+	}: {
+		session: GameSession<ScrabbleView, ScrabbleAction>;
+		onExit: () => void;
+		exitLabel?: string;
+	} = $props();
 
 	const PREMIUM_COLOR = { TW: '#b91c1c', DW: '#be7c8c', TL: '#1d4ed8', DL: '#60a5fa' };
 	const DEFAULT_ZOOM = 5;
+	const CENTRE = 7;
+	/** A stray nod just after the game ends must not choose what happens next. */
+	const END_BUTTONS_DELAY_MS = 1500;
+	/** The two-step picker for a blank: a group of letters, then the letter. */
+	const LETTER_GROUPS = ['ABCDE', 'FGHIJ', 'KLMNO', 'PQRST', 'UVWXYZ'];
 
-	type Placed = { r: number; c: number; letter: string; rackIndex: number };
+	type Placed = { r: number; c: number; letter: string; tileId: number; blank: boolean };
+	type Stage = 'idle' | 'held' | 'zoom' | 'blank' | 'swap' | 'pass' | 'done';
 
-	// The computer's opening: BOARD across the centre, with the A on the centre square.
-	let committed = $state<Record<string, string>>(
-		Object.fromEntries([...'BOARD'].map((letter, i) => [`7,${5 + i}`, letter]))
-	);
-	const rack = ['T', 'G', 'I', 'M', 'E', 'L', 'S'];
+	const snap = $derived($session);
+	const view = $derived(snap.view);
+	const rack = $derived(view.rack);
+	const committed = $derived(view.board);
+	const fullGame = $derived(snap.showOpponents);
 
 	let pending = $state<Placed[]>([]);
-	let stage = $state<'idle' | 'held' | 'zoom' | 'done'>('idle');
+	let stage = $state<Stage>('idle');
 	let heldIndex = $state<number | null>(null);
+	/** The letter a held blank stands for. */
+	let blankLetter = $state<string | null>(null);
+	let blankGroup = $state<string | null>(null);
+	let swapping = $state<number[]>([]);
 	let zoom = $state<{ r0: number; c0: number; n: number } | null>(null);
 	let zoomSize = $state(DEFAULT_ZOOM);
 	let message = $state('');
-	let score = $state(0);
 	let boardEl = $state<HTMLElement>();
-	let dictionary: Set<string> | null = null;
+	let leaving = $state(false);
+	let endButtons = $state(false);
+	/** Sent and waiting for an answer, so a second nod can't send the same play twice. */
+	let submitted = $state(false);
+	/** Squares from the last move, so a new word stands out for a moment. */
+	let recent = $state<string[]>([]);
 
 	const pendingAt = (r: number, c: number) => pending.find((p) => p.r === r && p.c === c);
-	const letterAt = (r: number, c: number) => committed[`${r},${c}`] ?? pendingAt(r, c)?.letter;
-	const rackUsed = (i: number) => pending.some((p) => p.rackIndex === i);
-	const heldLetter = $derived(heldIndex === null ? null : rack[heldIndex]);
-
-	onMount(async () => {
-		const text = await (await fetch('/dict/enable.txt')).text();
-		dictionary = new Set(text.split(/\r?\n/).map((w) => w.trim().toUpperCase()));
-	});
+	const letterAt = (r: number, c: number) => committed[`${r},${c}`]?.letter ?? pendingAt(r, c)?.letter;
+	const blankAt = (r: number, c: number) => committed[`${r},${c}`]?.blank ?? pendingAt(r, c)?.blank ?? false;
+	const rackUsed = (i: number) => pending.some((p) => p.tileId === rack[i]?.id);
+	const heldTile = $derived(heldIndex === null ? null : rack[heldIndex]);
+	const heldLetter = $derived(heldTile ? (heldTile.letter === '?' ? blankLetter : heldTile.letter) : null);
+	const myTurn = $derived(view.can.place && !submitted && !leaving);
+	const boardEmpty = $derived(Object.keys(committed).length === 0);
 
 	// A shake only ever undoes the last tile placed. Closing things is the job of the close button,
 	// so a head drifting while the player thinks can't lose them anything but a tile.
@@ -65,14 +78,101 @@
 	});
 	onDestroy(releaseCancel);
 
+	function clearHold() {
+		heldIndex = null;
+		blankLetter = null;
+		blankGroup = null;
+		zoom = null;
+	}
+
+	// Tiles leave the pending play once the session has taken them off the rack.
+	$effect(() => {
+		const ids = new Set(view.rack.map((t) => t.id));
+		untrack(() => {
+			if (pending.some((p) => !ids.has(p.tileId))) {
+				pending = pending.filter((p) => ids.has(p.tileId));
+				submitted = false;
+			}
+		});
+	});
+
+	// A refused play stays on the board, with the reason and how to fix it.
+	$effect(() => {
+		const rejected = snap.rejected;
+		if (!rejected) return;
+		log.event('rejected', { reason: rejected.reason });
+		untrack(() => {
+			submitted = false;
+			const hint = /connect to the board|centre/.test(rejected.reason)
+				? ''
+				: rejected.reason.includes('dictionary')
+					? ' Shake to take a tile back.'
+					: ' Shake to take one back.';
+			message = `${rejected.reason}${hint}`;
+		});
+	});
+
+	// Whatever just landed on the board gets a glow, and the move goes in the session log.
+	let knownSquares: Set<string> | null = null;
+	$effect(() => {
+		const squares = Object.keys(committed);
+		untrack(() => {
+			const known = knownSquares;
+			knownSquares = new Set(squares);
+			if (!known) return;
+			const fresh = squares.filter((key) => !known.has(key));
+			if (fresh.length) recent = fresh;
+		});
+	});
+
+	const lastKey = $derived(JSON.stringify(view.last));
+	let loggedKey: string | undefined;
+	$effect(() => {
+		const key = lastKey;
+		untrack(() => {
+			if (key !== loggedKey && view.last) {
+				if (view.last.kind === 'place') {
+					log.event('played', { word: view.last.word, gained: view.last.score, seat: view.last.seat });
+				} else {
+					log.event('turn', { ...view.last });
+				}
+			}
+			loggedKey = key;
+		});
+	});
+
+	$effect(() => {
+		const ended = snap.ended;
+		untrack(() => {
+			if (ended) {
+				stage = 'done';
+				clearHold();
+				pending = [];
+				return;
+			}
+			if (stage === 'done') {
+				stage = 'idle';
+				message = '';
+				recent = [];
+			}
+		});
+		if (!ended) {
+			endButtons = false;
+			return;
+		}
+		const timer = setTimeout(() => (endButtons = true), END_BUTTONS_DELAY_MS);
+		return () => clearTimeout(timer);
+	});
+
 	function closeStep() {
 		message = '';
 		if (stage === 'zoom') {
 			stage = 'held';
 			zoom = null;
+			// A blank opened straight into the zoom has no "held" step to go back to.
 		} else if (stage === 'held') {
 			stage = 'idle';
-			heldIndex = null;
+			clearHold();
 		}
 	}
 
@@ -87,6 +187,8 @@
 		if (pending.length > 1) {
 			return pending[0].r === pending[1].r ? pending[0].r === r : pending[0].c === c;
 		}
+		// The first word of a game has to cross the centre.
+		if (boardEmpty) return r === CENTRE || c === CENTRE;
 		return Object.keys(committed).some((key) => {
 			const [kr, kc] = key.split(',').map(Number);
 			return kr === r || kc === c;
@@ -114,6 +216,16 @@
 	function pickTile(i: number) {
 		heldIndex = i;
 		message = '';
+		if (rack[i].letter === '?') {
+			blankLetter = null;
+			blankGroup = null;
+			stage = 'blank';
+			return;
+		}
+		goToBoard();
+	}
+
+	function goToBoard() {
 		const last = pending[pending.length - 1];
 		if (!last) {
 			stage = 'held';
@@ -123,95 +235,73 @@
 		const start = (v: number) => Math.max(0, Math.min(SIZE - zoomSize, v - Math.floor(zoomSize / 2)));
 		zoom = { r0: start(last.r), c0: start(last.c), n: zoomSize };
 		stage = 'zoom';
-		session.event('zoom', { r: last.r, c: last.c, ...zoom, auto: true });
+		log.event('zoom', { r: last.r, c: last.c, ...zoom, auto: true });
+	}
+
+	function chooseBlank(letter: string) {
+		blankLetter = letter;
+		blankGroup = null;
+		log.event('blank', { letter });
+		goToBoard();
+	}
+
+	function closeBlank() {
+		if (blankGroup) {
+			blankGroup = null;
+			return;
+		}
+		stage = 'idle';
+		clearHold();
 	}
 
 	function openZoom(ctx: ConfirmContext) {
 		const { r, c } = pointToCell(ctx.point ?? { x: innerWidth / 2, y: innerHeight / 2 });
 		zoom = zoomAround(r, c);
 		stage = 'zoom';
-		session.event('zoom', { r, c, ...zoom, x: ctx.point?.x, y: ctx.point?.y });
+		log.event('zoom', { r, c, ...zoom, x: ctx.point?.x, y: ctx.point?.y });
 	}
 
 	function placeAt(r: number, c: number) {
-		if (heldIndex === null) return;
-		session.event('place', { r, c, letter: rack[heldIndex] });
-		pending = [...pending, { r, c, letter: rack[heldIndex], rackIndex: heldIndex }];
-		heldIndex = null;
-		zoom = null;
+		if (!heldTile || !heldLetter) return;
+		log.event('place', { r, c, letter: heldLetter });
+		pending = [
+			...pending,
+			{ r, c, letter: heldLetter, tileId: heldTile.id, blank: heldTile.letter === '?' }
+		];
+		clearHold();
 		stage = 'idle';
 	}
 
-	function wordThrough(r: number, c: number, dr: number, dc: number) {
-		let [sr, sc] = [r, c];
-		while (letterAt(sr - dr, sc - dc)) {
-			sr -= dr;
-			sc -= dc;
-		}
-		const cells: { r: number; c: number; letter: string }[] = [];
-		for (let [cr, cc] = [sr, sc]; letterAt(cr, cc); cr += dr, cc += dc) {
-			cells.push({ r: cr, c: cc, letter: letterAt(cr, cc)! });
-		}
-		return cells;
-	}
-
-	function scoreWord(cells: { r: number; c: number; letter: string }[]) {
-		let sum = 0;
-		let mult = 1;
-		for (const cell of cells) {
-			let v = VALUES[cell.letter] ?? 0;
-			if (pendingAt(cell.r, cell.c)) {
-				const pr = premium(cell.r, cell.c);
-				if (pr === 'DL') v *= 2;
-				if (pr === 'TL') v *= 3;
-				if (pr === 'DW') mult *= 2;
-				if (pr === 'TW') mult *= 3;
-			}
-			sum += v;
-		}
-		return sum * mult;
-	}
-
 	function playWord() {
-		const rows = new Set(pending.map((p) => p.r));
-		const cols = new Set(pending.map((p) => p.c));
-		if (rows.size > 1 && cols.size > 1) {
-			message = 'Tiles must be in one line. Shake to take one back.';
-			return;
-		}
-		const across =
-			rows.size === 1 && (cols.size > 1 || wordThrough(pending[0].r, pending[0].c, 0, 1).length > 1);
-		const [dr, dc] = across ? [0, 1] : [1, 0];
-		const main = wordThrough(pending[0].r, pending[0].c, dr, dc);
-		if (!pending.every((p) => main.some((m) => m.r === p.r && m.c === p.c))) {
-			message = 'Tiles must connect with no gaps. Shake to take one back.';
-			return;
-		}
-		const words = [main];
-		for (const p of pending) {
-			const cross = wordThrough(p.r, p.c, dc, dr);
-			if (cross.length > 1) words.push(cross);
-		}
-		const touches = main.some((m) => committed[`${m.r},${m.c}`]) || words.length > 1;
-		if (!touches) {
-			message = 'Your word has to connect to the board.';
-			return;
-		}
-		for (const w of words) {
-			const text = w.map((x) => x.letter).join('');
-			if (text.length < 2 || (dictionary && !dictionary.has(text))) {
-				message = `${text} isn't in the dictionary. Shake to take a tile back.`;
-				return;
-			}
-		}
-		const gained = words.reduce((s, w) => s + scoreWord(w), 0);
-		score += gained;
-		for (const p of pending) committed[`${p.r},${p.c}`] = p.letter;
-		const played = main.map((m) => m.letter).join('');
-		pending = [];
-		stage = 'done';
-		message = `${played} for ${gained} points!`;
-		session.event('played', { word: played, gained });
+		submitted = true;
+		message = '';
+		session.send({
+			type: 'place',
+			tiles: pending.map(({ r, c, letter, tileId }) => ({ r, c, letter, tileId }))
+		});
+	}
+
+	function passTurn() {
+		stage = 'idle';
+		message = '';
+		session.send({ type: 'pass' });
+	}
+
+	function startSwap() {
+		swapping = [];
+		message = '';
+		stage = 'swap';
+	}
+
+	function toggleSwap(id: number) {
+		swapping = swapping.includes(id) ? swapping.filter((x) => x !== id) : [...swapping, id];
+	}
+
+	function confirmSwap() {
+		const tileIds = swapping;
+		swapping = [];
+		stage = 'idle';
+		session.send({ type: 'exchange', tileIds });
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -220,16 +310,35 @@
 	}
 
 	const prompt = $derived(
-		stage === 'idle'
-			? pending.length
-				? 'Pick another tile, point at Play and nod, or shake to undo'
-				: 'Point your head at a tile and nod to pick it up'
-			: stage === 'held'
-				? `Point where ${heldLetter} should go and nod to zoom in`
-				: stage === 'zoom'
-					? 'Point at a square and nod to place it'
-					: 'You did it'
+		stage === 'done'
+			? 'You did it'
+			: stage === 'swap'
+				? 'Nod at the tiles to swap, then point at Swap'
+				: stage === 'pass'
+					? 'Pass your turn?'
+					: stage === 'blank'
+						? blankGroup
+							? 'Point at the letter this blank should be'
+							: 'Which letters should this blank be among?'
+						: stage === 'held'
+							? `Point where ${heldLetter} should go and nod to zoom in`
+							: stage === 'zoom'
+								? 'Point at a square and nod to place it'
+								: !view.can.place
+									? `${snap.names[view.current] ?? 'They'} is thinking`
+									: pending.length
+										? 'Pick another tile, point at Play and nod, or shake to undo'
+										: boardEmpty
+											? 'Pick a tile. The first word must cross the centre square'
+											: 'Point your head at a tile and nod to pick it up'
 	);
+
+	const headline = $derived.by(() => {
+		if (snap.ended) return snap.ended.text;
+		if (message) return message;
+		if (fullGame && snap.note && stage === 'idle' && !pending.length) return `${snap.note}. ${prompt}`;
+		return prompt;
+	});
 
 	// While holding a tile, show the area that will open when they nod.
 	const zoomPreview = $derived.by(() => {
@@ -242,14 +351,17 @@
 
 	// What the player could see, so the session log says what they were trying to do.
 	$effect(() => {
-		session.event('game', {
+		log.event('game', {
 			game: 'scrabble',
 			stage,
 			holding: heldLetter,
 			placed: pending.map((p) => `${p.letter}@${p.r},${p.c}`),
-			rack: rack.filter((_, i) => !rackUsed(i)).join(''),
-			score,
-			says: message || prompt
+			rack: rack.filter((_, i) => !rackUsed(i)).map((t) => t.letter).join(''),
+			score: view.scores[view.me],
+			scores: view.scores,
+			current: view.current,
+			bag: view.bagCount,
+			says: headline
 		});
 	});
 
@@ -263,29 +375,91 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex h-full w-full flex-col items-center justify-between gap-2 py-3">
-	<p class="text-2xl font-semibold" class:text-emerald-300={stage === 'done'}>{message || prompt}</p>
+	<p class="text-2xl font-semibold" class:text-emerald-300={stage === 'done'}>{headline}</p>
 
 	<div class="flex gap-6">
-		{#each rack as letter, i (i)}
-			{@const available = stage === 'idle' && !rackUsed(i)}
+		{#each rack as tile, i (tile.id)}
+			{@const available = stage === 'swap' || (stage === 'idle' && myTurn && !rackUsed(i))}
 			<button
-				use:target={{ id: `rack-${i}`, legal: available, calib: true, confirm: () => pickTile(i) }}
+				use:target={{
+					id: `rack-${i}`,
+					legal: available && !leaving,
+					calib: true,
+					confirm: () => (stage === 'swap' ? toggleSwap(tile.id) : pickTile(i))
+				}}
 				class="rack-tile"
 				class:gone={rackUsed(i) || heldIndex === i}
 				class:off={!available}
+				class:chosen={swapping.includes(tile.id)}
 				class:focused={targets.focused === `rack-${i}`}
 			>
-				{letter}<sub>{VALUES[letter]}</sub>
+				{tile.letter === '?' ? '' : tile.letter}<sub>{tileValue(tile.letter)}</sub>
 			</button>
 		{/each}
 	</div>
 
 	<div class="flex items-start gap-8">
+		{#if fullGame}
+			<!-- Left of the board and level with its lower half: never between the rack and the board. -->
+			<div class="side flex w-44 flex-col gap-5">
+				{#if stage === 'pass'}
+					<button
+						use:target={{ id: 'pass-no', legal: !leaving, confirm: () => (stage = 'idle') }}
+						class="action close"
+						class:focused={targets.focused === 'pass-no'}
+					>
+						✕ Keep turn
+					</button>
+					<button
+						use:target={{ id: 'pass-yes', legal: !leaving, confirm: passTurn }}
+						class="action bg-slate-600"
+						class:focused={targets.focused === 'pass-yes'}
+					>
+						Yes, pass
+					</button>
+				{:else if stage === 'swap'}
+					<button
+						use:target={{ id: 'swap-no', legal: !leaving, confirm: () => (stage = 'idle') }}
+						class="action close"
+						class:focused={targets.focused === 'swap-no'}
+					>
+						✕ Cancel
+					</button>
+					<button
+						use:target={{ id: 'swap-yes', legal: swapping.length > 0 && !leaving, confirm: confirmSwap }}
+						class="action bg-slate-600"
+						class:off={swapping.length === 0}
+						class:focused={targets.focused === 'swap-yes'}
+					>
+						Swap {swapping.length || ''}
+					</button>
+				{:else}
+					{@const canAct = stage === 'idle' && myTurn && pending.length === 0}
+					<button
+						use:target={{ id: 'pass', legal: canAct && view.can.pass, confirm: () => (stage = 'pass') }}
+						class="action bg-slate-600"
+						class:off={!(canAct && view.can.pass)}
+						class:focused={targets.focused === 'pass'}
+					>
+						Pass
+					</button>
+					<button
+						use:target={{ id: 'exchange', legal: canAct && view.can.exchange, confirm: startSwap }}
+						class="action bg-slate-600"
+						class:off={!(canAct && view.can.exchange)}
+						class:focused={targets.focused === 'exchange'}
+					>
+						Exchange
+					</button>
+				{/if}
+			</div>
+		{/if}
+
 		<div
 			{@attach (el) => {
 				boardEl = el;
 			}}
-			use:target={{ id: 'board', legal: stage === 'held', confirm: openZoom }}
+			use:target={{ id: 'board', legal: stage === 'held' && !leaving, confirm: openZoom }}
 			class="board"
 			class:ready={stage === 'held'}
 		>
@@ -297,8 +471,14 @@
 					{@const pr = premium(r, c)}
 					<div class="cell" style:background={pr ? PREMIUM_COLOR[pr] : null}>
 						{#if letter}
-							<div class="tile" class:new={!!pendingAt(r, c)} in:scale={{ start: 1.8, duration: 260 }}>
-								{letter}<sub>{VALUES[letter]}</sub>
+							<div
+								class="tile"
+								class:new={!!pendingAt(r, c)}
+								class:recent={recent.includes(`${r},${c}`)}
+								class:blank={blankAt(r, c)}
+								in:scale={{ start: 1.8, duration: 260 }}
+							>
+								{letter}<sub>{blankAt(r, c) ? 0 : tileValue(letter)}</sub>
 							</div>
 						{:else if pr}
 							<span class="prem">{pr}</span>
@@ -331,7 +511,7 @@
 						<button
 							use:target={{
 								id: `cell-${r}-${c}`,
-								legal: !letterAt(r, c),
+								legal: !letterAt(r, c) && !leaving,
 								exact: true,
 								confirm: () => placeAt(r, c)
 							}}
@@ -350,27 +530,98 @@
 		</div>
 
 		<div class="flex w-44 flex-col gap-5">
-			<p class="text-center text-3xl font-bold">Score {score}</p>
+			{#if fullGame}
+				<div class="scores">
+					{#each view.scores as score, seat (seat)}
+						<p class:turn={view.current === seat && !snap.ended} class="font-bold">
+							<span>{seat === view.me ? 'You' : snap.names[seat]}</span>
+							<span>{score}</span>
+						</p>
+					{/each}
+					<p class="bag">{view.bagCount} in the bag</p>
+				</div>
+			{:else}
+				<p class="text-center text-3xl font-bold">Score {view.scores[view.me]}</p>
+			{/if}
 			<button
-				use:target={{ id: 'close', legal: stage === 'held' || stage === 'zoom', confirm: closeStep }}
+				use:target={{ id: 'close', legal: (stage === 'held' || stage === 'zoom') && !leaving, confirm: closeStep }}
 				class="action close"
 				class:gone={stage !== 'held' && stage !== 'zoom'}
 				class:focused={targets.focused === 'close'}
 			>
 				✕ {stage === 'zoom' ? 'Zoom out' : 'Put back'}
 			</button>
-			<button
-				use:target={{ id: 'play', legal: stage === 'idle' && pending.length > 0, confirm: playWord }}
-				class="action play bg-emerald-700"
-				class:off={!(stage === 'idle' && pending.length > 0)}
-				class:focused={targets.focused === 'play'}
-			>
-				Play
-			</button>
+			{#if stage === 'done'}
+				{#if snap.canRestart && session.restart}
+					<button
+						use:target={{ id: 'again', legal: endButtons, confirm: () => session.restart?.() }}
+						class="action play bg-emerald-700"
+						class:off={!endButtons}
+						class:focused={targets.focused === 'again'}
+					>
+						Play again
+					</button>
+				{/if}
+				<button
+					use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
+					class="action exit"
+					class:play={!(snap.canRestart && session.restart)}
+					class:off={!endButtons}
+					class:focused={targets.focused === 'menu'}
+				>
+					{exitLabel}
+				</button>
+			{:else}
+				<button
+					use:target={{ id: 'play', legal: stage === 'idle' && pending.length > 0 && myTurn, confirm: playWord }}
+					class="action play bg-emerald-700"
+					class:off={!(stage === 'idle' && pending.length > 0 && myTurn)}
+					class:focused={targets.focused === 'play'}
+				>
+					Play
+				</button>
+			{/if}
 		</div>
 	</div>
 
 </div>
+
+<GameExit show={snap.canLeave && stage !== 'done' && stage !== 'blank'} bind:leaving {onExit} />
+
+{#if stage === 'blank'}
+	<div transition:fade={{ duration: 200 }} class="fixed inset-0 z-[5] bg-black/70"></div>
+	<p class="pointer-events-none fixed inset-x-0 top-[12%] z-[6] text-center text-5xl font-bold">{prompt}</p>
+	<button
+		use:target={{ id: 'blank-close', legal: !leaving, confirm: closeBlank }}
+		class="blank-close"
+		class:focused={targets.focused === 'blank-close'}
+	>
+		✕ {blankGroup ? 'Back' : 'Put back'}
+	</button>
+	<div class="blank-row">
+		{#if blankGroup}
+			{#each [...blankGroup] as letter (letter)}
+				<button
+					use:target={{ id: `blank-${letter}`, legal: !leaving, confirm: () => chooseBlank(letter) }}
+					class="blank-choice"
+					class:focused={targets.focused === `blank-${letter}`}
+				>
+					{letter}
+				</button>
+			{/each}
+		{:else}
+			{#each LETTER_GROUPS as group (group)}
+				<button
+					use:target={{ id: `group-${group}`, legal: !leaving, confirm: () => (blankGroup = group) }}
+					class="blank-choice group"
+					class:focused={targets.focused === `group-${group}`}
+				>
+					{group[0]}–{group[group.length - 1]}
+				</button>
+			{/each}
+		{/if}
+	</div>
+{/if}
 
 {#if heldLetter && smoothPointer.visible && (stage === 'held' || stage === 'zoom')}
 	<div
@@ -378,7 +629,7 @@
 		class:landing={targets.focused?.startsWith('cell-')}
 		style:transform="translate({smoothPointer.x}px, {smoothPointer.y}px) translate(-50%, -120%)"
 	>
-		{heldLetter}<sub>{VALUES[heldLetter]}</sub>
+		{heldLetter}<sub>{heldTile?.letter === '?' ? 0 : tileValue(heldLetter)}</sub>
 	</div>
 {/if}
 
@@ -431,6 +682,13 @@
 	}
 	.tile.new {
 		background: #86efac;
+	}
+	.tile.recent {
+		background: #fde68a;
+		box-shadow: inset 0 0 0 2px #f59e0b;
+	}
+	.tile.blank {
+		color: #b45309;
 	}
 	sub {
 		font-size: 0.5em;
@@ -502,6 +760,83 @@
 	/* Well clear of the rack, so reaching for a letter can't land on Play. */
 	.play {
 		margin-top: 2.5rem;
+	}
+	/* Level with the lower half of the board, the same distance from the rack as Play. */
+	.side {
+		margin-top: 14rem;
+	}
+	.exit {
+		background: #334155;
+		font-size: 1.5rem;
+	}
+	.scores p {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.5rem;
+		border-radius: 0.5rem;
+		padding: 0.2rem 0.6rem;
+		font-size: 1.5rem;
+	}
+	.scores p.turn {
+		background: rgb(251 191 36 / 0.2);
+		box-shadow: 0 0 14px 2px rgb(251 191 36 / 0.5);
+	}
+	.scores .bag {
+		justify-content: center;
+		color: #94a3b8;
+		font-size: 1rem;
+		font-weight: 500;
+	}
+	.chosen {
+		background: #86efac;
+		outline: 5px solid #16a34a;
+	}
+	.blank-row {
+		position: fixed;
+		left: 3%;
+		right: 3%;
+		top: 36%;
+		z-index: 6;
+		display: flex;
+		justify-content: center;
+		gap: 3vw;
+	}
+	.blank-choice {
+		height: 34vh;
+		width: 13vw;
+		border-radius: 1.2rem;
+		border: 6px solid white;
+		background: #fcd34d;
+		color: #1c1917;
+		font-size: 4.5rem;
+		font-weight: 800;
+		transition: transform 90ms ease-out;
+	}
+	.blank-choice.group {
+		width: 15vw;
+		font-size: 3rem;
+	}
+	.blank-close {
+		position: fixed;
+		right: 2rem;
+		top: 1.5rem;
+		z-index: 6;
+		height: 6rem;
+		width: 10rem;
+		border-radius: 1rem;
+		border: 5px solid white;
+		background: #b91c1c;
+		font-size: 1.5rem;
+		font-weight: 800;
+		color: white;
+		transition: transform 90ms ease-out;
+	}
+	.blank-choice.focused,
+	.blank-close.focused {
+		transform: scale(calc(1.08 - var(--press, 0) * 0.08));
+		box-shadow:
+			0 0 0 4px #fde047,
+			0 0 45px 14px rgb(253 224 71 / 0.75);
 	}
 	.rack-tile {
 		display: flex;

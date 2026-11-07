@@ -34,6 +34,7 @@
 		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.3.0",
 		"@tensorflow/tfjs": "^4.22.0",
+		"@types/bun": "^1.4.4",
 		"@types/node": "^26",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",

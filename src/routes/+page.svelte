@@ -12,13 +12,41 @@
 	import Scrabble from '../lib/stages/Scrabble.svelte';
 	import Uno from '../lib/stages/Uno.svelte';
 	import { session } from '../lib/session';
+	import { createDemoScrabble, createDemoUno, createLocalScrabble, createLocalUno } from '../lib/session/browser';
+	import type { GameSession } from '../lib/session/types';
+	import type { UnoAction, UnoView } from '../lib/games/uno/engine';
+	import type { ScrabbleAction, ScrabbleView } from '../lib/games/scrabble/engine';
+	import Menu, { type MenuChoice } from '../lib/stages/Menu.svelte';
+	import Room from '../lib/stages/Room.svelte';
 	import { engine, setup, SOURCES } from '../lib/vision/engine.svelte';
 	import { gestureConfig } from '../lib/vision/gestures';
 
-	type Stage = 'gate' | 'instructions' | 'uno' | 'scrabble';
+	/** The scripted demo runs through these. It's what opens by default, and never needs a menu. */
+	type DemoStage = 'gate' | 'instructions' | 'uno' | 'scrabble';
+	type Stage = DemoStage | 'menu' | 'play-uno' | 'play-scrabble' | 'room';
 	const ORDER: Stage[] = ['gate', 'instructions', 'uno', 'scrabble'];
 
+	const params = new URLSearchParams(location.search);
+	/** Asks to join a room, from a shared link. */
+	const roomLink = params.get('room')?.toUpperCase() ?? null;
+	/** Where to go after the instructions, instead of carrying on with the demo. */
+	let afterInstructions = $state<Stage | null>(roomLink ? 'room' : params.has('play') ? 'menu' : null);
+	let roomRequest = $state<{ join: string } | null>(roomLink ? { join: roomLink } : null);
+
 	let stage = $state<Stage>('gate');
+	let localUno = $state<GameSession<UnoView, UnoAction> | null>(null);
+	let localScrabble = $state<GameSession<ScrabbleView, ScrabbleAction> | null>(null);
+	// A fresh script each time its stage opens, and stopped when it closes.
+	const demoUno = $derived(stage === 'uno' ? createDemoUno() : null);
+	const demoScrabble = $derived(stage === 'scrabble' ? createDemoScrabble() : null);
+	$effect(() => {
+		const opened = demoUno;
+		return () => opened?.close();
+	});
+	$effect(() => {
+		const opened = demoScrabble;
+		return () => opened?.close();
+	});
 	let hud = $state(false);
 	let test = $state<{ train: boolean } | null>(null);
 	let recording = $state(false);
@@ -44,8 +72,48 @@
 	let confirmWith = $state<'nod' | 'shake'>('nod');
 
 	function next() {
+		if (stage === 'instructions' && afterInstructions) {
+			stage = afterInstructions;
+			return;
+		}
 		const i = ORDER.indexOf(stage);
-		if (i < ORDER.length - 1) stage = ORDER[i + 1];
+		if (i >= 0 && i < ORDER.length - 1) stage = ORDER[i + 1];
+	}
+
+	function closeLocalGames() {
+		localUno?.close();
+		localScrabble?.close();
+		localUno = null;
+		localScrabble = null;
+	}
+
+	function toMenu() {
+		closeLocalGames();
+		roomRequest = null;
+		stage = 'menu';
+	}
+
+	function chooseFromMenu(choice: MenuChoice) {
+		session.event('menu', { choice });
+		closeLocalGames();
+		switch (choice) {
+			case 'demo':
+				afterInstructions = null;
+				stage = 'uno';
+				break;
+			case 'uno':
+				localUno = createLocalUno();
+				stage = 'play-uno';
+				break;
+			case 'scrabble':
+				localScrabble = createLocalScrabble();
+				stage = 'play-scrabble';
+				break;
+			case 'multiplayer':
+				roomRequest = null;
+				stage = 'room';
+				break;
+		}
 	}
 
 	function markMistake() {
@@ -66,6 +134,7 @@
 	}
 
 	function handoff() {
+		closeLocalGames();
 		engine.release();
 		stage = 'gate';
 	}
@@ -147,6 +216,10 @@
 			case 'n':
 				next();
 				break;
+			case 'p':
+				engine.lockFirst();
+				toMenu();
+				break;
 			case 'h':
 				handoff();
 				break;
@@ -195,10 +268,18 @@
 		<Gate />
 	{:else if stage === 'instructions'}
 		<Instructions onDone={next} />
-	{:else if stage === 'uno'}
-		<Uno onDone={next} />
-	{:else}
-		<Scrabble />
+	{:else if stage === 'uno' && demoUno}
+		<Uno session={demoUno} onDone={next} onExit={toMenu} />
+	{:else if stage === 'scrabble' && demoScrabble}
+		<Scrabble session={demoScrabble} onExit={toMenu} exitLabel="Play a real game" />
+	{:else if stage === 'menu'}
+		<Menu onChoose={chooseFromMenu} />
+	{:else if stage === 'play-uno' && localUno}
+		<Uno session={localUno} onDone={toMenu} onExit={toMenu} />
+	{:else if stage === 'play-scrabble' && localScrabble}
+		<Scrabble session={localScrabble} onExit={toMenu} />
+	{:else if stage === 'room'}
+		<Room request={roomRequest} onExit={toMenu} />
 	{/if}
 
 	{#if engine.lock === 'lost' && stage !== 'gate'}
@@ -220,7 +301,7 @@
 {/if}
 
 {#if !hud}
-	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">B test run · M marks a mistake · C recentres · D debug</p>
+	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">P play · B test run · M marks a mistake · C recentres · D debug</p>
 {/if}
 
 {#if away}
