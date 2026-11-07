@@ -138,6 +138,15 @@ for (const e of events) {
 		case 'cancel':
 			lines.push(`${when}   went back`);
 			break;
+		case 'away':
+			lines.push(`${when}   left the game`);
+			break;
+		case 'back':
+			lines.push(`${when}   came back`);
+			break;
+		case 'ignored':
+			lines.push(`${when}   ignored a ${e.kind} (${e.why})`);
+			break;
 	}
 }
 

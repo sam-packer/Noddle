@@ -27,6 +27,19 @@
 	/** Shows briefly that a mistake was marked in the session log. */
 	let marked = $state(false);
 	let markTimer: ReturnType<typeof setTimeout> | undefined;
+	/** In another window or tab, where head movement has nothing to do with the game. */
+	let away = $state(false);
+	let ignoreGesturesUntil = 0;
+	/** The head is still coming back to the screen for a moment after the player returns. */
+	const RETURN_GRACE_MS = 1200;
+
+	function setAway(next: boolean) {
+		if (next === away) return;
+		away = next;
+		session.event(next ? 'away' : 'back', {});
+		if (!next) ignoreGesturesUntil = performance.now() + RETURN_GRACE_MS;
+	}
+
 	/** Which gesture confirms. The other one goes back, so the two can be compared. */
 	let confirmWith = $state<'nod' | 'shake'>('nod');
 
@@ -62,6 +75,10 @@
 		engine.onFrame = (p, t) => targets.updateGaze(p, t, engine.selectionHeld);
 		engine.onGesture = (g) => {
 			if (test || collecting) return;
+			if (away || performance.now() < ignoreGesturesUntil) {
+				session.event('ignored', { kind: g.kind, why: away ? 'away' : 'just back' });
+				return;
+			}
 			if (g.kind === confirmWith) targets.confirmGaze(g.onset);
 			else targets.cancel();
 		};
@@ -160,7 +177,13 @@
 	}
 </script>
 
-<svelte:window onkeydown={onKeydown} onmousemove={() => targets.mouseMoved()} />
+<svelte:window
+	onkeydown={onKeydown}
+	onmousemove={() => targets.mouseMoved()}
+	onblur={() => setAway(true)}
+	onfocus={() => setAway(false)}
+/>
+<svelte:document onvisibilitychange={() => setAway(document.hidden)} />
 
 <main
 	class="h-screen w-screen overflow-hidden bg-slate-950 text-white"
@@ -198,6 +221,12 @@
 
 {#if !hud}
 	<p class="fixed right-2 bottom-1 z-30 text-xs text-slate-500">B test run · M marks a mistake · C recentres · D debug</p>
+{/if}
+
+{#if away}
+	<p class="fixed inset-x-0 top-0 z-[70] bg-sky-700 py-3 text-center text-2xl font-bold text-white">
+		Paused while you're away. Click back to keep playing.
+	</p>
 {/if}
 
 {#if marked}
