@@ -23,6 +23,7 @@
 		"replay": "bun scripts/replay.ts",
 		"pointer": "bun scripts/pointer.ts",
 		"benchmark": "bun scripts/benchmark.ts",
+		"accuracy": "bun scripts/accuracy.ts",
 		"tune": "bun scripts/tune.ts",
 		"gate": "bun scripts/gate.ts",
 		"db:push": "drizzle-kit push",

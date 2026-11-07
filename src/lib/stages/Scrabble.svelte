@@ -713,14 +713,18 @@
 		line-height: 2rem;
 	}
 	/* Up high to save the neck, and stopping 120px short of the Leave button. */
+	/*
+	 * Tile centres are 10vw apart, which is 2.4 degrees of head turn on any screen. Recordings put
+	 * the good range at 9 to 11.5vw and don't settle it further. Centred over the board.
+	 */
 	.rack {
 		position: absolute;
-		left: 1.5rem;
-		right: 16.5rem;
+		left: 0;
+		right: 1.5rem;
 		top: 2.75rem;
 		display: flex;
 		justify-content: center;
-		gap: calc((100vw - 18rem - 7 * var(--rack-tile)) / 6);
+		gap: calc(10vw - var(--rack-tile));
 	}
 	.board {
 		position: absolute;
