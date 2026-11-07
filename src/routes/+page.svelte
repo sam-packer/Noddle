@@ -5,6 +5,7 @@
 	import AccuracyTest from '../lib/stages/AccuracyTest.svelte';
 	import Benchmark from '../lib/stages/Benchmark.svelte';
 	import Collector from '../lib/stages/Collector.svelte';
+	import EyeCompare from '../lib/stages/EyeCompare.svelte';
 	import Gate from '../lib/stages/Gate.svelte';
 	import Hud from '../lib/stages/Hud.svelte';
 	import Instructions from '../lib/stages/Instructions.svelte';
@@ -53,6 +54,9 @@
 	let test = $state<{ train: boolean } | null>(null);
 	let recording = $state(false);
 	let collecting = $state(false);
+	let eyes = $state(false);
+	/** The moving pointer would pull the eyes off the dot being measured. */
+	let eyesMeasuring = $state(false);
 	let testRun = $state(false);
 	/** Shows briefly that a mistake was marked in the session log. */
 	let marked = $state(false);
@@ -180,7 +184,7 @@
 				if (away && !document.hidden && g.kind === confirmWith) setAway(false);
 				return;
 			}
-			if (test || collecting || recording) {
+			if (test || collecting || recording || eyes) {
 				if (g.kind === confirmWith) toolInput.nod?.(g.onset);
 				else toolInput.shake?.();
 				return;
@@ -220,6 +224,11 @@
 				break;
 			case 'g':
 				startRecording();
+				break;
+			case 'e':
+				engine.lockFirst();
+				hud = false;
+				eyes = true;
 				break;
 			case 'b':
 				engine.lockFirst();
@@ -338,7 +347,7 @@
 	{/if}
 </main>
 
-{#if smoothPointer.visible}
+{#if smoothPointer.visible && !eyesMeasuring}
 	<div
 		class="pointer"
 		style:transform="translate({smoothPointer.x}px, {smoothPointer.y}px) translate(-50%, -50%)"
@@ -361,6 +370,16 @@
 
 {#if collecting}
 	<Collector onClose={() => (collecting = false)} />
+{/if}
+
+{#if eyes}
+	<EyeCompare
+		bind:measuring={eyesMeasuring}
+		onClose={() => {
+			eyes = false;
+			eyesMeasuring = false;
+		}}
+	/>
 {/if}
 
 {#if recording}

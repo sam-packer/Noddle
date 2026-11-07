@@ -1,6 +1,6 @@
 /**
  * Dev only: records every play session to .recordings/sessions, so what the player meant to do can
- * be compared with what the tracking did. Head angles and game events only, never video.
+ * be compared with what the tracking did. Head and iris angles and game events only, never video.
  */
 const FLUSH_MS = 3000;
 const ENABLED = import.meta.env.DEV && typeof window !== 'undefined';
@@ -31,7 +31,7 @@ class SessionLog {
 	}
 
 	/** One tracked camera frame. Short keys, because there are 30 of these every second. */
-	frame(t: number, yaw: Num, pitch: Num, x: Num, y: Num, headX: Num, headY: Num, held: boolean) {
+	frame(t: number, yaw: Num, pitch: Num, x: Num, y: Num, headX: Num, headY: Num, held: boolean, eyeX: Num, eyeY: Num) {
 		if (!ENABLED) return;
 		this.lines.push(
 			JSON.stringify({
@@ -42,7 +42,9 @@ class SessionLog {
 				v: round(y),
 				a: round(headX),
 				b: round(headY),
-				h: held ? 1 : 0
+				h: held ? 1 : 0,
+				i: round(eyeX),
+				j: round(eyeY)
 			})
 		);
 	}

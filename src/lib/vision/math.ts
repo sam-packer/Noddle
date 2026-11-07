@@ -121,6 +121,41 @@ export function irisFeatures(lm: Lm[], W: number, H: number): number[] {
 	return [...one(33, 133, 468), ...one(362, 263, 473)];
 }
 
+export type IrisReading = {
+	/** How far the iris has turned inside the eye, in degrees: image right, and image down. */
+	x: number;
+	y: number;
+	/** Eyelid gap as a share of eye width. Drops during a blink. */
+	open: number;
+};
+
+/** Where the eyes are turned, relative to the head. Measured only: it never moves the pointer. */
+export function irisAngles(lm: Lm[], W: number, H: number, irisCm: number): IrisReading {
+	const EYEBALL_RADIUS_CM = 1.2;
+	const cmPerPx = irisCm / Math.max(irisPx(lm, W, H), 1);
+	const toDeg = (px: number) =>
+		Math.asin(Math.max(-1, Math.min(1, (px * cmPerPx) / EYEBALL_RADIUS_CM))) * DEG;
+	const dist = (a: number, b: number) =>
+		Math.hypot((lm[a].x - lm[b].x) * W, (lm[a].y - lm[b].y) * H);
+	const one = (c1: number, c2: number, iris: number, lidTop: number, lidBottom: number) => {
+		const ax = lm[c1].x * W;
+		const ay = lm[c1].y * H;
+		const ux = lm[c2].x * W - ax;
+		const uy = lm[c2].y * H - ay;
+		const len = Math.hypot(ux, uy) || 1;
+		const ix = lm[iris].x * W - (ax + ux / 2);
+		const iy = lm[iris].y * H - (ay + uy / 2);
+		return {
+			x: toDeg((ix * ux + iy * uy) / len),
+			y: toDeg((-ix * uy + iy * ux) / len),
+			open: dist(lidTop, lidBottom) / len
+		};
+	};
+	const a = one(33, 133, 468, 159, 145);
+	const b = one(362, 263, 473, 386, 374);
+	return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, open: (a.open + b.open) / 2 };
+}
+
 /** Ridge regression from features to x and y, with a bias term in the features. */
 export class RidgeMap {
 	private wx: number[] | null = null;

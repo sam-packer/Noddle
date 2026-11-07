@@ -33,6 +33,20 @@ function saveRecordings(): Plugin {
 				});
 			});
 
+			// Eye comparison runs: the numbers, and the magnified clip. Never leaves this machine.
+			server.middlewares.use('/__eyes', (req, res) => {
+				const url = new URL(req.url ?? '', 'http://local');
+				const id = (url.searchParams.get('id') ?? 'unknown').replace(/\W/g, '');
+				const ext = (url.searchParams.get('ext') ?? 'json').replace(/\W/g, '');
+				mkdirSync('.recordings/eyes', { recursive: true });
+				const chunks: Buffer[] = [];
+				req.on('data', (chunk) => chunks.push(chunk));
+				req.on('end', () => {
+					writeFileSync(`.recordings/eyes/${id}.${ext}`, Buffer.concat(chunks));
+					res.end('saved');
+				});
+			});
+
 			// Face crops and their labels, from the data collector. Never leaves this machine.
 			server.middlewares.use('/__dataset', (req, res) => {
 				const url = new URL(req.url ?? '', 'http://local');

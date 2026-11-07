@@ -4,12 +4,14 @@ import { HeadGestures, type Gesture, type NodStyle } from './gestures';
 import {
 	faceBox,
 	headAngles,
+	irisAngles,
 	irisPx,
 	median,
 	medianPoint,
 	OneEuro,
 	OneEuro2D,
 	type FaceBox,
+	type IrisReading,
 	type Lm,
 	type Point
 } from './math';
@@ -76,6 +78,7 @@ export type DataFrame = {
 	pitch: number;
 	distance: number;
 	ear: number;
+	iris: IrisReading;
 };
 
 /** How much of each signal is median filtered, in ms. Eye models get long windows, for nystagmus. */
@@ -623,6 +626,7 @@ class VisionEngine {
 		const Y = ((v - H / 2) * Z) / fx;
 		this.distanceCm = Z;
 		this.lastFace = { eye: { X, Y, Z } };
+		const eyes = irisAngles(lm, W, H, setup.irisCm);
 
 		// Calibration-free model: square crop of the face.
 		if (this.freeReady && !this.freeBusy) {
@@ -706,7 +710,8 @@ class VisionEngine {
 			yaw,
 			pitch,
 			distance: Z,
-			ear: this.ear
+			ear: this.ear,
+			iris: eyes
 		});
 
 		session.frame(
@@ -717,7 +722,9 @@ class VisionEngine {
 			this.pointer?.y,
 			this.gaze.head?.x,
 			this.gaze.head?.y,
-			this.selectionHeld
+			this.selectionHeld,
+			eyes.x,
+			eyes.y
 		);
 
 		this.history.push({
@@ -739,6 +746,9 @@ class VisionEngine {
 				noseX: round(lm[1].x * W),
 				noseY: round(lm[1].y * H),
 				irisPx: round(iris),
+				eyeX: round(eyes.x),
+				eyeY: round(eyes.y),
+				eyeOpen: round(eyes.open),
 				distance: round(Z),
 				ear: round(this.ear),
 				headX: round(this.gaze.head?.x),
