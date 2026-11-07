@@ -33,6 +33,11 @@ const MAGNET_MAX_WIDTH_PX = 320;
 /** It doesn't lean when another target is this close, because exactly where it is matters then. */
 const MAGNET_CLEAR_PX = 260;
 const MOUSE_PRIORITY_MS = 1500;
+/**
+ * A nod moves the head up and down. This much sideways after it began means the player was still
+ * arriving, so the neighbour they arrived at is what they meant, and not the one they passed.
+ */
+const STILL_ARRIVING_PX = 100;
 
 /** How far the pointer is outside a target. Zero when it is on the target. */
 function rectGap(r: DOMRect, p: Point) {
@@ -47,6 +52,9 @@ function rectDistance(r: DOMRect, p: Point) {
 	const centre = Math.hypot(r.left + r.width / 2 - p.x, r.top + r.height / 2 - p.y);
 	return inside + centre * 0.05;
 }
+
+/** Tiles, cards and colours sit in a row of their kind, named like `rack-3`. */
+const kindOf = (id: string) => id.split('-')[0];
 
 function centreOf(el: HTMLElement): Point {
 	const r = el.getBoundingClientRect();
@@ -215,10 +223,13 @@ class Targets {
 		// the nod began, that is what the player meant, whatever was still highlighted.
 		const under = this.legalAt(engine.pointerAt(onset));
 		if (under) entry = under;
+		const arrived = this.arrivedAt(entry, onset);
+		if (arrived) entry = arrived;
 		const point = engine.pointAt(onset);
 		session.event('confirm', {
 			chose: entry?.def.legal ? entry.def.id : null,
 			wasAtOnset: id,
+			arrived: !!arrived,
 			selectedNow: this.focused,
 			onset,
 			x: point && Math.round(point.x),
@@ -234,6 +245,20 @@ class Targets {
 		}
 		if (entry.def.calib) engine.addSample(centreOf(entry.el), onset);
 		entry.def.confirm({ point, via: 'gaze' });
+	}
+
+	/**
+	 * The neighbour to use instead, if the head was still sweeping along a row when the nod began.
+	 * Only ever another of the same kind: a big nod can drop the pointer onto Play or Leave by the
+	 * time it fires, and board squares are close enough that the start of the nod must decide.
+	 */
+	private arrivedAt(entry: Entry | undefined, onset: number) {
+		const now = this.focused ? this.entries.get(this.focused) : undefined;
+		if (!entry || !now?.def.legal || now === entry || now.def.exact) return null;
+		if (kindOf(now.def.id) !== kindOf(entry.def.id)) return null;
+		const from = engine.pointerAt(onset);
+		const to = engine.pointerNow();
+		return from && to && Math.abs(to.x - from.x) >= STILL_ARRIVING_PX ? now : null;
 	}
 
 	cancel() {

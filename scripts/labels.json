@@ -828,6 +828,16 @@
 				53.6
 			],
 			"shouldNotFire": []
+		},
+		"1794069315218.jsonl": {
+			"note": "Sam deliberately played with big bops. Sam reported that the I was picked by accident at this moment: they had swept across it to G, which was selected before the nod fired. The head was still arriving when the nod began.",
+			"wanted": [
+				[
+					47.5,
+					"rack-1"
+				]
+			],
+			"shouldNotFire": []
 		}
 	}
 }

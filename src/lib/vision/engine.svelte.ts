@@ -804,6 +804,11 @@ class VisionEngine {
 		return before?.[this.active] ?? null;
 	}
 
+	/** Where the head is pointing this frame, even while the pointer on screen is held through a nod. */
+	pointerNow(): Point | null {
+		return this.history[this.history.length - 1]?.[this.active] ?? null;
+	}
+
 	sourcePointNow(s: SourceId, msBack = 800): Point | null {
 		const now = this.lastTs;
 		return medianPoint(

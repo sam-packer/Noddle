@@ -41,6 +41,8 @@ export const gestureConfig = {
 	/** Usual nod size in degrees, up to which someone is subtle, and from which they are big. */
 	subtleDeg: 4.5,
 	bigDeg: 9,
+	/** They must get this far past a line to cross it, so one nod either way can't flip their style. */
+	styleMarginDeg: 1,
 	/** Share of the way back the head must come for the bump to count. */
 	returnShare: 0.5,
 	/** Out and back has to fit in this long. Anything slower is looking around. */
@@ -263,10 +265,18 @@ export class HeadGestures {
 	}
 
 	/** How this person has been nodding lately, once there's enough to go on. */
-	get nodStyle(): NodStyle | null {
-		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return null;
+	nodStyle: NodStyle | null = null;
+
+	private updateStyle() {
+		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return;
+		const { subtleDeg, bigDeg, styleMarginDeg: margin } = gestureConfig;
 		const usual = middle(this.nodSizes);
-		return usual < gestureConfig.subtleDeg ? 'subtle' : usual >= gestureConfig.bigDeg ? 'big' : 'steady';
+		const was = this.nodStyle;
+		// Leaving the current style takes the extra margin. Staying doesn't.
+		const subtleLine = was === 'subtle' ? subtleDeg + margin : subtleDeg - margin;
+		const bigLine = was === 'big' ? bigDeg - margin : bigDeg + margin;
+		if (was === null) this.nodStyle = usual < subtleDeg ? 'subtle' : usual >= bigDeg ? 'big' : 'steady';
+		else this.nodStyle = usual < subtleLine ? 'subtle' : usual >= bigLine ? 'big' : 'steady';
 	}
 
 	/** For analysis: what the detector makes of this axis right now, and why. */
@@ -338,6 +348,7 @@ export class HeadGestures {
 		this.turnedDown = null;
 		remember(this.nodSpeeds, nod);
 		rememberSize(this.nodSizes, nod);
+		this.updateStyle();
 	}
 
 	push(t: number, yawRaw: number, pitchRaw: number): Gesture | null {

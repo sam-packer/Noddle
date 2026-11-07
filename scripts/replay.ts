@@ -71,19 +71,30 @@ function score(say: (line: string) => void) {
 			const c = (layouts.length ? layouts : confirms).reduce((a, b) =>
 				Math.abs(b.t - at) < Math.abs(a.t - at) ? b : a
 			);
-			const f = frames.reduce((a, b) => (Math.abs(b.t - onset) < Math.abs(a.t - onset) ? b : a));
-			const headX = f.a ?? f.x;
-			const headY = f.b ?? f.v;
-			let best = '-';
-			let bestGap = Infinity;
-			for (const [id, l, t, w, h] of c.targets ?? []) {
-				const gap = Math.hypot(Math.max(l - headX, 0, headX - l - w), Math.max(t - headY, 0, headY - t - h));
-				if (gap < bestGap) {
-					bestGap = gap;
-					best = id;
+			const nearestFrame = (time: number) =>
+				frames.reduce((a, b) => (Math.abs(b.t - time) < Math.abs(a.t - time) ? b : a));
+			const nearestTarget = (f: Row) => {
+				const headX = f.a ?? f.x;
+				const headY = f.b ?? f.v;
+				let best = '-';
+				let bestGap = Infinity;
+				for (const [id, l, t, w, h] of c.targets ?? []) {
+					const gap = Math.hypot(Math.max(l - headX, 0, headX - l - w), Math.max(t - headY, 0, headY - t - h));
+					if (gap < bestGap) {
+						bestGap = gap;
+						best = id;
+					}
 				}
-			}
-			return { id: best, gap: Math.round(bestGap) };
+				return { id: best, gap: Math.round(bestGap) };
+			};
+			const start = nearestFrame(onset);
+			const end = nearestFrame(at);
+			const began = nearestTarget(start);
+			const arrived = nearestTarget(end);
+			// As in the game: still sweeping along a row of one kind means the neighbour was meant.
+			const sameKind = began.id.split('-')[0] === arrived.id.split('-')[0] && !arrived.id.startsWith('cell-');
+			const sideways = Math.abs((end.a ?? end.x) - (start.a ?? start.x));
+			return sameKind && sideways >= 100 ? arrived : began;
 		};
 
 		const fired: { s: number; onset: number; at: number; size: number; speed: number }[] = [];
