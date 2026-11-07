@@ -289,6 +289,119 @@ const missLines = misses.map(
 );
 console.log(missLines.length ? `\nLooked like a gesture but did not count:\n  ${missLines.join('\n  ')}` : '\nNo missed gestures found.');
 
+/** Iris against head. Eyes roam during play, so the stillest stretches of head say the most. */
+/** Nods keep breaking up play, and stretches between them rarely last longer than this. */
+const EYE_WINDOW_S = 3;
+const EYE_MAX_GAP_MS = 200;
+const EYE_DRIFT_MS = 1000;
+
+const midpoint = (values: number[]) => {
+	const s = [...values].sort((a, b) => a - b);
+	const m = s.length >> 1;
+	return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const spread = (values: number[]) => {
+	const mean = values.reduce((a, b) => a + b, 0) / values.length;
+	return Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length);
+};
+const range = (values: number[]) => Math.max(...values) - Math.min(...values);
+
+/** Tracked runs without a break, leaving out blinks and the moments a nod is under way. */
+function eyeRuns() {
+	const open = frames.filter((f) => f.o != null).map((f) => f.o);
+	const blink = open.length ? midpoint(open) * 0.6 : -Infinity;
+	const runs: Row[][] = [];
+	let run: Row[] = [];
+	for (const f of frames) {
+		const usable = f.i != null && !f.h && (f.o == null || f.o >= blink);
+		if (!usable || (run.length && f.t - run[run.length - 1].t > EYE_MAX_GAP_MS)) {
+			if (run.length) runs.push(run);
+			run = [];
+		}
+		if (usable) run.push(f);
+	}
+	if (run.length) runs.push(run);
+	return runs;
+}
+
+/** What's left of a signal once slow drift is gone. */
+function eyeWobble(run: Row[], key: string) {
+	return run.map((f) => {
+		const near = run.filter((o) => Math.abs(o.t - f.t) <= EYE_DRIFT_MS / 2).map((o) => o[key]);
+		return f[key] - midpoint(near);
+	});
+}
+
+/** The strongest repeating movement between 1 and 10 Hz, and how much of that band it holds. */
+function strongestHz(run: Row[], key: string) {
+	const mean = run.reduce((a, f) => a + f[key], 0) / run.length;
+	const span = run[run.length - 1].t - run[0].t;
+	let best = { hz: 0, share: 0 };
+	let peak = 0;
+	let total = 0;
+	for (let hz = 1; hz <= 10; hz += 0.2) {
+		let re = 0;
+		let im = 0;
+		run.forEach((f, i) => {
+			const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * (f.t - run[0].t)) / span);
+			re += (f[key] - mean) * w * Math.cos((2 * Math.PI * hz * f.t) / 1000);
+			im += (f[key] - mean) * w * Math.sin((2 * Math.PI * hz * f.t) / 1000);
+		});
+		const power = re * re + im * im;
+		total += power;
+		if (power > peak) {
+			peak = power;
+			best = { hz, share: 0 };
+		}
+	}
+	return { hz: best.hz, share: peak / (total || 1) };
+}
+
+function stillestStretches(runs: Row[][], count: number) {
+	const found: { head: number; part: Row[] }[] = [];
+	for (const run of runs) {
+		for (let a = 0; a < run.length; a += 15) {
+			let b = a;
+			while (b < run.length && run[b].t - run[a].t < EYE_WINDOW_S * 1000) b++;
+			if (b >= run.length) break;
+			const part = run.slice(a, b);
+			if (part.length < EYE_WINDOW_S * 20) continue;
+			found.push({ head: spread(part.map((f) => f.y)) + spread(part.map((f) => f.p)), part });
+		}
+	}
+	found.sort((x, y) => x.head - y.head);
+	const kept: Row[][] = [];
+	for (const { part } of found) {
+		if (kept.every((k) => part[0].t > k[k.length - 1].t || part[part.length - 1].t < k[0].t)) kept.push(part);
+		if (kept.length === count) break;
+	}
+	return kept;
+}
+
+const eyeLines: string[] = [];
+const eyeStretches = stillestStretches(eyeRuns(), 5);
+if (frames.some((f) => f.i != null)) {
+	const runs = eyeRuns().filter((r) => r.length >= 60);
+	const typical = (key: string) =>
+		midpoint(runs.flatMap((r) => eyeWobble(r, key).map(Math.abs)));
+	eyeLines.push(
+		`All play, typical wobble: iris ${typical('i').toFixed(2)}° across, ${typical('j').toFixed(2)}° up and down. ` +
+			`Head ${typical('y').toFixed(2)}° yaw, ${typical('p').toFixed(2)}° pitch.`
+	);
+	for (const part of eyeStretches) {
+		const v = (key: string) => part.map((f) => f[key]);
+		const hz = strongestHz(part, 'i');
+		const headHz = strongestHz(part, 'y');
+		eyeLines.push(
+			`${stamp(part[0].t)} stillest head: iris spread ${spread(v('i')).toFixed(2)}° across, ${spread(v('j')).toFixed(2)}° up and down, ` +
+				`range ${range(v('i')).toFixed(1)}° and ${range(v('j')).toFixed(1)}°. ` +
+				`Head spread ${spread(v('y')).toFixed(2)}° yaw, ${spread(v('p')).toFixed(2)}° pitch. ` +
+				`Strongest rhythm: iris ${hz.hz.toFixed(1)} Hz (${Math.round(hz.share * 100)}% of band), head ${headHz.hz.toFixed(1)} Hz (${Math.round(headHz.share * 100)}%).`
+		);
+	}
+	console.log(`\nEyes against head:\n  ${eyeLines.join('\n  ')}`);
+}
+
 const esc = (s: unknown) =>
 	String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
@@ -330,13 +443,45 @@ function chartRow(from: number) {
 				`<circle cx="${x(sec(m.c.far))}" cy="26" r="6" fill="none" stroke="#f59e0b" stroke-width="2.5"><title>${esc(`Did not count: ${m.why}`)}</title></circle>`
 		)
 		.join('');
+	const irisLines =
+		fs[0].i != null
+			? line((f) => deg((f.j ?? fs[0].j) - fs[0].j), '#fdba74', 1) + line((f) => deg((f.i ?? fs[0].i) - fs[0].i), '#f97316', 1)
+			: '';
 	return `<h2>${from}–${to}s</h2><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Head movement from ${from} to ${to} seconds">
 		${marks}
 		${missMarks}
 		${line((f) => (f.v == null ? null : (f.v / tallest) * H), 'var(--pointer)', 1)}
 		${line((f) => deg(f.p - fs[0].p), '#dc2626')}
 		${line((f) => deg(f.y - fs[0].y), '#2563eb')}
+		${irisLines}
 	</svg>`;
+}
+
+/** The head's stillest stretch up close, with iris and head on one scale. */
+function eyeChart(part: Row[]) {
+	const W = 1400;
+	const H = 320;
+	const keys: [string, string][] = [
+		['j', '#fdba74'],
+		['i', '#f97316'],
+		['p', '#dc2626'],
+		['y', '#2563eb']
+	];
+	const centred = (key: string) => {
+		const mid = midpoint(part.map((f) => f[key]));
+		return part.map((f) => f[key] - mid);
+	};
+	const reach = Math.max(1, ...keys.flatMap(([k]) => centred(k).map(Math.abs)));
+	const paths = keys
+		.map(([k, color]) => {
+			const values = centred(k);
+			const points = part
+				.map((f, i) => `${(((f.t - part[0].t) / (EYE_WINDOW_S * 1000)) * W).toFixed(1)},${(H / 2 - (values[i] / reach) * (H / 2 - 4)).toFixed(1)}`)
+				.join(' ');
+			return `<polyline fill="none" stroke="${color}" stroke-width="1.8" points="${points}"/>`;
+		})
+		.join('');
+	return `<h2>${stamp(part[0].t).trim()}: ${EYE_WINDOW_S} seconds, top to bottom is ±${reach.toFixed(1)}°</h2><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Iris and head movement during a still stretch">${paths}</svg>`;
 }
 
 const rowsHtml: string[] = [];
@@ -356,6 +501,7 @@ pre { white-space: pre-wrap; } .red { color: #dc2626; } .blue { color: #2563eb; 
 <h1>Session ${esc(basename(path))}</h1>
 <p><b class="red">Pitch</b> · <b class="blue">Yaw</b> · grey is pointer height · <b class="green">green</b> is a nod · <b class="purple">purple</b> is a shake · an orange dot was turned down · an orange ring looked like a gesture but did not count · a thick red line is a marked mistake</p>
 <h2>Aim at the moment of each pick (median)</h2><pre>${esc(aim.join('\n'))}</pre>
+${eyeLines.length ? `<h2>Eyes against head</h2><pre>${esc(eyeLines.join('\n'))}</pre><p><b style="color:#f97316">Iris across</b> · <b style="color:#fdba74">Iris up and down</b> · <b class="blue">Yaw</b> · <b class="red">Pitch</b></p>${eyeStretches.map(eyeChart).join('\n')}` : ''}
 ${checks.length ? `<h2>Worth checking</h2><pre>${esc(checks.join('\n'))}</pre>` : ''}
 ${missLines.length ? `<h2>Looked like a gesture but did not count</h2><pre>${esc(missLines.join('\n'))}</pre>` : ''}
 ${rowsHtml.join('\n')}

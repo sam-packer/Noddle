@@ -31,7 +31,7 @@ class SessionLog {
 	}
 
 	/** One tracked camera frame. Short keys, because there are 30 of these every second. */
-	frame(t: number, yaw: Num, pitch: Num, x: Num, y: Num, headX: Num, headY: Num, held: boolean, eyeX: Num, eyeY: Num) {
+	frame(t: number, yaw: Num, pitch: Num, x: Num, y: Num, headX: Num, headY: Num, held: boolean, eyeX: Num, eyeY: Num, eyeOpen: Num) {
 		if (!ENABLED) return;
 		this.lines.push(
 			JSON.stringify({
@@ -44,7 +44,8 @@ class SessionLog {
 				b: round(headY),
 				h: held ? 1 : 0,
 				i: round(eyeX),
-				j: round(eyeY)
+				j: round(eyeY),
+				o: round(eyeOpen)
 			})
 		);
 	}

@@ -724,7 +724,8 @@ class VisionEngine {
 			this.gaze.head?.y,
 			this.selectionHeld,
 			eyes.x,
-			eyes.y
+			eyes.y,
+			eyes.open
 		);
 
 		this.history.push({
