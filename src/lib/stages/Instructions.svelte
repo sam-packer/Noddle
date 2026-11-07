@@ -24,8 +24,8 @@
 <div class="relative h-full w-full">
 	<div class="absolute top-[8%] left-1/2 w-3/5 -translate-x-1/2 text-center">
 		{#if finished}
-			<p class="text-5xl font-bold">Shake your head to go back</p>
-			<p class="mt-3 text-2xl text-slate-300">Make it a quick one: to the side and back. Then let's play</p>
+			<p class="text-5xl font-bold">A quick shake undoes your last tile</p>
+			<p class="mt-3 text-2xl text-slate-300">Try it, or point at Let's play and nod</p>
 		{:else}
 			<p class="text-5xl font-bold">Point your head at the glowing card, then nod</p>
 			<p class="mt-3 text-2xl text-slate-300">
@@ -36,6 +36,16 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if finished}
+		<button
+			use:target={{ id: 'start', legal: true, confirm: onDone }}
+			class="start"
+			class:focused={targets.focused === 'start'}
+		>
+			Let's play
+		</button>
+	{/if}
 
 	{#each spots as spot, i (i)}
 		<button
@@ -74,6 +84,19 @@
 			0 0 0 6px white,
 			0 0 70px 22px rgb(253 224 71 / 0.9);
 		transform: translateY(calc(var(--press, 0) * 1.2rem)) scale(calc(1.1 - var(--press, 0) * 0.08));
+	}
+	.start {
+		position: absolute;
+		left: 50%;
+		top: 34%;
+		height: 6rem;
+		width: 22rem;
+		translate: -50% -50%;
+		border-radius: 1rem;
+		border: 5px solid white;
+		background: #047857;
+		font-size: 2.2rem;
+		font-weight: 800;
 	}
 	.meter {
 		height: 0.9rem;

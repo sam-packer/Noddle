@@ -82,15 +82,14 @@
 		});
 	}
 
-	const releaseCancel = targets.claimCancel(() => {
-		if (phase === 'pick') {
-			const wild = discard.pop();
-			if (wild) hand.splice(3, 0, { id: wild.id, color: 'wild', value: 'W' });
-			phase = 'play';
-		}
-	});
+	/** Takes a played Wild back, from the close button on the color picker. */
+	function takeBackWild() {
+		const wild = discard.pop();
+		if (wild) hand.splice(3, 0, { id: wild.id, color: 'wild', value: 'W' });
+		phase = 'play';
+	}
+
 	onDestroy(() => {
-		releaseCancel();
 		for (const t of timers) clearTimeout(t);
 	});
 
@@ -294,6 +293,14 @@
 		<p class="absolute top-[8%] z-[5] w-full text-center text-5xl font-bold">
 			Point at a color and nod
 		</p>
+		<button
+			transition:fade={{ duration: 200 }}
+			use:target={{ id: 'pick-close', legal: true, confirm: takeBackWild }}
+			class="close-picker"
+			class:focused={targets.focused === 'pick-close'}
+		>
+			✕<span>Take back</span>
+		</button>
 		{#each corners as c (c.color)}
 			<button
 				transition:fade={{ duration: 200 }}
@@ -452,12 +459,34 @@
 	.picker {
 		position: absolute;
 		z-index: 4;
-		top: 24%;
+		top: 32%;
 		height: 44vh;
 		width: 20vw;
 		border-radius: 1.2rem;
 		border: 6px solid white;
 		transition: box-shadow 120ms;
+	}
+	.close-picker {
+		position: absolute;
+		z-index: 4;
+		right: 2rem;
+		top: 1.5rem;
+		display: flex;
+		height: 8rem;
+		width: 10rem;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		border-radius: 1rem;
+		border: 5px solid white;
+		background: #b91c1c;
+		font-size: 3rem;
+		font-weight: 800;
+		line-height: 1;
+	}
+	.close-picker span {
+		margin-top: 0.4rem;
+		font-size: 1.2rem;
 	}
 	.picker.focused {
 		transform: none;

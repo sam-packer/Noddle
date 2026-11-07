@@ -56,7 +56,16 @@
 		dictionary = new Set(text.split(/\r?\n/).map((w) => w.trim().toUpperCase()));
 	});
 
+	// A shake only ever undoes the last tile placed. Closing things is the job of the close button,
+	// so a head drifting while the player thinks can't lose them anything but a tile.
 	const releaseCancel = targets.claimCancel(() => {
+		if (stage !== 'idle' || !pending.length) return;
+		message = '';
+		pending = pending.slice(0, -1);
+	});
+	onDestroy(releaseCancel);
+
+	function closeStep() {
 		message = '';
 		if (stage === 'zoom') {
 			stage = 'held';
@@ -64,11 +73,8 @@
 		} else if (stage === 'held') {
 			stage = 'idle';
 			heldIndex = null;
-		} else if (stage === 'idle' && pending.length) {
-			pending = pending.slice(0, -1);
 		}
-	});
-	onDestroy(releaseCancel);
+	}
 
 	/**
 	 * Squares that couldn't be part of a play are dimmed as a guide. They can still be chosen, so
@@ -216,12 +222,12 @@
 	const prompt = $derived(
 		stage === 'idle'
 			? pending.length
-				? 'Pick another tile, or point at Play and nod'
+				? 'Pick another tile, point at Play and nod, or shake to undo'
 				: 'Point your head at a tile and nod to pick it up'
 			: stage === 'held'
-				? `Point where ${heldLetter} should go and nod to zoom in. Shake to put it back`
+				? `Point where ${heldLetter} should go and nod to zoom in`
 				: stage === 'zoom'
-					? 'Point at a square and nod to place it. Shake to choose somewhere else'
+					? 'Point at a square and nod to place it'
 					: 'You did it'
 	);
 
@@ -346,8 +352,16 @@
 		<div class="flex w-44 flex-col gap-5">
 			<p class="text-center text-3xl font-bold">Score {score}</p>
 			<button
+				use:target={{ id: 'close', legal: stage === 'held' || stage === 'zoom', confirm: closeStep }}
+				class="action close"
+				class:gone={stage !== 'held' && stage !== 'zoom'}
+				class:focused={targets.focused === 'close'}
+			>
+				✕ {stage === 'zoom' ? 'Zoom out' : 'Put back'}
+			</button>
+			<button
 				use:target={{ id: 'play', legal: stage === 'idle' && pending.length > 0, confirm: playWord }}
-				class="action bg-emerald-700"
+				class="action play bg-emerald-700"
 				class:off={!(stage === 'idle' && pending.length > 0)}
 				class:focused={targets.focused === 'play'}
 			>
@@ -480,6 +494,14 @@
 		transition:
 			transform 90ms ease-out,
 			opacity 150ms;
+	}
+	.close {
+		background: #b91c1c;
+		font-size: 1.5rem;
+	}
+	/* Well clear of the rack, so reaching for a letter can't land on Play. */
+	.play {
+		margin-top: 2.5rem;
 	}
 	.rack-tile {
 		display: flex;
