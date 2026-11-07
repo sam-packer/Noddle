@@ -11,6 +11,9 @@ export type Gesture = {
 	speed: number;
 };
 
+/** How someone nods. Subtle is what we want to encourage, since it tires the neck least. */
+export type NodStyle = 'subtle' | 'steady' | 'big';
+
 /** A bump that had the right shape but was small or slow for this person. */
 export type RejectedBump = Gesture & { needSpeed: number };
 
@@ -29,6 +32,15 @@ export const gestureConfig = {
 	personalSpeedShare: 0.55,
 	/** The speed needed never goes above this, so a player who starts big can still nod gently. */
 	personalSpeedMax: 24,
+	/** A big nodder's small wobbles aren't nods. The smallest that counts is this share of their usual. */
+	personalSizeShare: 0.3,
+	/** The smallest that counts never goes above this, so they can still calm down and nod gently. */
+	personalSizeMax: 3.5,
+	/** A turned-down nod followed by a real one this soon was a real try, so it teaches us too. */
+	retryMs: 2500,
+	/** Usual nod size in degrees, up to which someone is subtle, and from which they are big. */
+	subtleDeg: 4.5,
+	bigDeg: 9,
 	/** Share of the way back the head must come for the bump to count. */
 	returnShare: 0.5,
 	/** Out and back has to fit in this long. Anything slower is looking around. */
@@ -210,9 +222,14 @@ function fastest(buf: S[], axis: Axis, from: number, to: number) {
 	return top;
 }
 
-function remember(speeds: number[], bump: Bump) {
+function remember(speeds: number[], bump: Pick<Bump, 'speed'>) {
 	speeds.push(bump.speed);
 	if (speeds.length > PERSONAL_MAX_SEEN) speeds.shift();
+}
+
+function rememberSize(sizes: number[], bump: Pick<Bump, 'sizeDeg'>) {
+	sizes.push(bump.sizeDeg);
+	if (sizes.length > PERSONAL_MAX_SEEN) sizes.shift();
 }
 
 /** Detects a nod or shake from one tracked face's head angles. */
@@ -223,7 +240,10 @@ export class HeadGestures {
 	private fy = new OneEuro(4, 0.02);
 	private fp = new OneEuro(4, 0.02);
 	private nodSpeeds: number[] = [];
+	private nodSizes: number[] = [];
 	private shakeSpeeds: number[] = [];
+	/** The last nod turned down, in case the next one shows it was a real try. */
+	private turnedDown: { t: number; speed: number; sizeDeg: number } | null = null;
 	/** The last bump turned down for being too small or slow, for the session log. */
 	rejected: RejectedBump | null = null;
 
@@ -232,6 +252,21 @@ export class HeadGestures {
 		const cfg = gestureConfig;
 		if (seen.length < PERSONAL_MIN_SEEN) return 0;
 		return Math.min(cfg.personalSpeedMax, cfg.personalSpeedShare * middle(seen));
+	}
+
+	/** The smallest nod that counts for this person. */
+	private nodSizeNeeded() {
+		const cfg = gestureConfig;
+		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return cfg.nodDeg;
+		const share = cfg.personalSizeShare * middle(this.nodSizes);
+		return Math.max(cfg.nodDeg, Math.min(cfg.personalSizeMax, share));
+	}
+
+	/** How this person has been nodding lately, once there's enough to go on. */
+	get nodStyle(): NodStyle | null {
+		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return null;
+		const usual = middle(this.nodSizes);
+		return usual < gestureConfig.subtleDeg ? 'subtle' : usual >= gestureConfig.bigDeg ? 'big' : 'steady';
 	}
 
 	/** For analysis: what the detector makes of this axis right now, and why. */
@@ -261,7 +296,10 @@ export class HeadGestures {
 		].filter((b) => b !== null);
 		const good = looks.find((b) => b.speed >= needSpeed);
 		if (good) return good;
-		if (looks.length) this.rejected = { kind, t, ...looks[0], needSpeed };
+		if (looks.length) {
+			this.rejected = { kind, t, ...looks[0], needSpeed };
+			if (kind === 'nod') this.turnedDown = { t, speed: looks[0].speed, sizeDeg: looks[0].sizeDeg };
+		}
 		return null;
 	}
 
@@ -290,6 +328,18 @@ export class HeadGestures {
 		return falling >= STARTING_FALL_DEG_S;
 	}
 
+	/** Keeps up with how they nod, which changes as they relax or tire. */
+	private learnNod(nod: Bump, t: number) {
+		// A try we turned down, so gentler nods stop being missed the way this one was.
+		if (this.turnedDown && t - this.turnedDown.t <= gestureConfig.retryMs) {
+			remember(this.nodSpeeds, this.turnedDown);
+			rememberSize(this.nodSizes, this.turnedDown);
+		}
+		this.turnedDown = null;
+		remember(this.nodSpeeds, nod);
+		rememberSize(this.nodSizes, nod);
+	}
+
 	push(t: number, yawRaw: number, pitchRaw: number): Gesture | null {
 		const yaw = this.fy.filter(yawRaw, t);
 		const pitch = this.fp.filter(pitchRaw, t);
@@ -299,12 +349,13 @@ export class HeadGestures {
 
 		const cfg = gestureConfig;
 		const nod =
-			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', cfg.nodDeg, this.nodSpeeds, t);
+			t < this.nodBlockedUntil ? null : this.check('nod', 'pitch', this.nodSizeNeeded(), this.nodSpeeds, t);
 		const quick = nod ? null : this.check('shake', 'yaw', cfg.shakeDeg, this.shakeSpeeds, t);
 		const shake = quick && quick.speed >= cfg.shakeMinSpeed ? quick : null;
 		const found = nod ?? shake;
 		if (!found) return null;
-		remember(shake ? this.shakeSpeeds : this.nodSpeeds, found);
+		if (!shake) this.learnNod(found, t);
+		else remember(this.shakeSpeeds, found);
 
 		this.blockedUntil = t + (shake ? cfg.shakeRefractoryMs : cfg.refractoryMs);
 		this.nodBlockedUntil = t + (shake ? cfg.shakeRefractoryMs : cfg.nodRefractoryMs);

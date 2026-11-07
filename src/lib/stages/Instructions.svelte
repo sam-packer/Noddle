@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
 	import { target, targets } from '../input/targets.svelte';
 	import { engine } from '../vision/engine.svelte';
 	import Confetti from './Confetti.svelte';
@@ -11,87 +10,51 @@
 	const spots = [
 		{ x: 10, y: 20 },
 		{ x: 90, y: 20 },
-		{ x: 90, y: 58 },
-		{ x: 10, y: 58 },
 		{ x: 50, y: 58 }
 	];
+	/** Where the practice tile sits on the rack, for the picture to turn toward. */
+	const TILE_AIM = { x: 0.52, y: 0.8 };
 	/** The pointer wobbles over a card's edge, and the picture shouldn't restart each time it does. */
 	const LEFT_GOAL_MS = 500;
-	/** Nobody gets stuck if their shake doesn't register. */
+	/** Nobody gets stuck if their nod or shake doesn't register. */
+	const PICK_PATIENCE_MS = 12000;
 	const SHAKE_PATIENCE_MS = 8000;
 	/** Long enough to watch the tile land, and for the head to settle before there's a nod to catch. */
 	const AFTER_SHAKE_MS = 1100;
 	const RACK = ['N', 'O', 'D', null, 'L', 'E'];
-	/** The corner cards are done with the pointer hidden, so the head turns the way it naturally would. */
-	const BLIND_CARDS = 4;
-	/** How long the picture shows turning, before it shows the nod. */
-	const TURN_FIRST_MS = 1600;
-	/** Nods that didn't follow a head turn before the card moves on anyway, teaching us nothing. */
-	const BLIND_TRIES = 3;
 
 	let step = $state(0);
 	let leaving = $state(false);
-	/** A nod anywhere counts on these cards, because the player has no pointer to aim with. */
-	const blind = $derived(engine.headCalibrating);
-	let turning = $state(true);
-	let tries = $state(0);
+	/** Pick the tile up, see it land in the wrong spot, then shake it home. */
+	let practice = $state<'pick' | 'wrong' | 'home'>('pick');
+	let canStart = $state(false);
 	const finished = $derived(step >= spots.length);
 	/** Fills as the head moves, and is full once the nod is big enough to count. */
-	const nodMeter = $derived(targets.focused || blind ? engine.nodProgress : 0);
+	const nodMeter = $derived(targets.focused ? engine.nodProgress : 0);
 	const needsAim = $derived(!finished && targets.missedNods > 0 && !targets.focused);
 
-	const goal = $derived(finished ? 'start' : `spot-${step}`);
+	const goal = $derived.by(() => {
+		if (!finished) return `spot-${step}`;
+		return practice === 'pick' ? 'practice-tile' : 'start';
+	});
 	let reached = $state<string | null>(null);
 	const onGoal = $derived(reached === goal);
 
-	let shaken = $state(false);
-	let canStart = $state(false);
-
 	const cue = $derived.by(() => {
-		if (blind) return turning ? 'point' : 'nod';
 		if (onGoal) return 'nod';
-		if (!finished) return 'point';
-		return 'shake';
+		return finished && practice !== 'pick' ? 'shake' : 'point';
+	});
+	const aim = $derived.by(() => {
+		if (!finished) return { x: spots[step].x / 100, y: spots[step].y / 100 };
+		return practice === 'pick' ? TILE_AIM : null;
 	});
 	const word = $derived.by(() => {
-		if (blind) return turning ? 'Turn to the card' : 'Nod';
 		if (onGoal) return 'Nod';
-		if (finished) return 'Shake';
+		if (finished && practice !== 'pick') return 'Wrong spot! Shake';
 		return needsAim ? 'Aim first' : 'Turn your head';
 	});
 
 	targets.missedNods = 0;
-	engine.beginHeadCalibration();
-	onDestroy(() => engine.endHeadCalibration());
-
-	function blindNod(onset: number) {
-		const spot = spots[step];
-		const point = { x: (spot.x / 100) * innerWidth, y: (spot.y / 100) * innerHeight };
-		if (!engine.addHeadPose(point, onset) && tries + 1 < BLIND_TRIES) {
-			tries += 1;
-			turning = true;
-			return;
-		}
-		tries = 0;
-		step += 1;
-		turning = true;
-		if (step >= BLIND_CARDS) {
-			engine.endHeadCalibration();
-			targets.missedNods = 0;
-		}
-	}
-
-	$effect(() => {
-		if (!blind || leaving) return;
-		targets.onBareNod = blindNod;
-		return () => (targets.onBareNod = null);
-	});
-
-	$effect(() => {
-		if (!blind || !turning) return;
-		const timer = setTimeout(() => (turning = false), TURN_FIRST_MS);
-		return () => clearTimeout(timer);
-	});
 
 	$effect(() => {
 		if (targets.focused === goal) {
@@ -103,40 +66,59 @@
 	});
 
 	// The shake only sends the tile home. A nod on Let's play is what moves on.
-	$effect(() => (finished && !leaving ? targets.claimCancel(() => (shaken = true)) : undefined));
+	$effect(() =>
+		practice === 'wrong' && !leaving ? targets.claimCancel(() => (practice = 'home')) : undefined
+	);
 
 	$effect(() => {
 		if (!finished) return;
-		const timer = setTimeout(() => (canStart = true), shaken ? AFTER_SHAKE_MS : SHAKE_PATIENCE_MS);
+		const wait = { pick: PICK_PATIENCE_MS, wrong: SHAKE_PATIENCE_MS, home: AFTER_SHAKE_MS }[practice];
+		const timer = setTimeout(() => (canStart = true), wait);
 		return () => clearTimeout(timer);
 	});
 </script>
 
 <div class="relative h-full w-full">
-	{#if !shaken}
+	{#if practice !== 'home'}
 		<div class="lesson" class:invisible={leaving}>
 			<div class="meter" class:shown={cue === 'nod'} aria-hidden="true">
 				<div class="fill" class:full={nodMeter >= 1} style:height="{nodMeter * 100}%"></div>
 			</div>
-			<HeadCue gesture={cue} size="min(34vw, 52vh)" />
-			<p class="word" class:warn={needsAim}>{word}</p>
+			{#key `${goal}-${cue}`}
+				<HeadCue gesture={cue} {aim} size="min(34vw, 52vh)" />
+			{/key}
+			<p class="word" class:warn={needsAim || (finished && practice === 'wrong' && !onGoal)}>{word}</p>
 		</div>
 	{/if}
 
 	{#if finished}
 		<div class="practice-row" class:invisible={leaving}>
-			<div class="practice" class:alone={!canStart} class:shaken aria-hidden="true">
-				<div class="board">
+			<div class="practice" class:alone={!canStart} class:shaken={practice === 'home'}>
+				<div class="board" aria-hidden="true">
 					{#each { length: 18 }, i (i)}
 						<span class="square"></span>
 					{/each}
 				</div>
-				<div class="rack">
+				<div class="rack" aria-hidden="true">
 					{#each RACK as letter, i (i)}
 						<span class="square" class:rack-tile={letter}>{letter}</span>
 					{/each}
 				</div>
-				<span class="tile" class:home={shaken}>D</span>
+				<button
+					use:target={{
+						id: 'practice-tile',
+						legal: practice === 'pick' && !leaving,
+						calib: true,
+						confirm: () => (practice = 'wrong')
+					}}
+					class="tile"
+					class:ready={practice === 'pick'}
+					class:wrong={practice === 'wrong'}
+					class:flown={practice === 'home'}
+					class:focused={targets.focused === 'practice-tile'}
+				>
+					D
+				</button>
 			</div>
 			<div class="start-slot">
 				{#if canStart}
@@ -152,7 +134,7 @@
 		</div>
 	{/if}
 
-	{#if shaken}
+	{#if practice === 'home'}
 		<Confetti />
 	{/if}
 
@@ -162,7 +144,7 @@
 		<button
 			use:target={{
 				id: `spot-${i}`,
-				legal: step === i && !leaving && !blind,
+				legal: step === i && !leaving,
 				calib: true,
 				confirm: () => (step = i + 1)
 			}}
@@ -290,7 +272,7 @@
 	.rack .rack-tile {
 		background: #cbd5e1;
 	}
-	/* Second row of the board, and flies to the gap in the rack, which it completes. */
+	/* Its place on the board. Every other state moves it from here. */
 	.tile {
 		--to-x: calc((var(--cell) + var(--gap)) * 2);
 		--to-y: calc(var(--cell) * 2 + var(--gap) + var(--pad) * 2 + var(--rack-gap));
@@ -305,8 +287,26 @@
 		background: #fde047;
 		box-shadow: 0 0 0 3px white;
 	}
-	.tile.home {
+	/* Starts in the gap on the rack, which it completes. */
+	.tile.ready,
+	.tile.flown {
 		transform: translate(var(--to-x), var(--to-y));
+	}
+	.tile.ready {
+		pointer-events: auto;
+	}
+	/* Landed somewhere it plainly shouldn't be, so there's a reason to undo. */
+	.tile.wrong {
+		background: #fca5a5;
+		box-shadow: 0 0 0 4px #dc2626;
+		transition: transform 350ms ease-out;
+	}
+	.tile.focused {
+		background: #fde047;
+		box-shadow:
+			0 0 0 5px white,
+			0 0 40px 12px rgb(253 224 71 / 0.9);
+		scale: 1.15;
 	}
 
 	.start-slot {
@@ -353,10 +353,13 @@
 	}
 
 	@media (prefers-reduced-motion: no-preference) {
-		.tile:not(.home) {
+		.tile.ready:not(.focused) {
 			animation: waiting 1.1s ease-in-out infinite;
 		}
-		.tile.home {
+		.tile.wrong {
+			animation: wrong-spot 1.1s ease-in-out infinite;
+		}
+		.tile.flown {
 			animation: fly-home 750ms ease-in-out;
 		}
 		.start {
@@ -375,6 +378,19 @@
 			box-shadow:
 				0 0 0 3px white,
 				0 0 22px 8px rgb(251 191 36 / 0.8);
+		}
+	}
+	@keyframes wrong-spot {
+		0%,
+		60%,
+		100% {
+			rotate: 0deg;
+		}
+		20% {
+			rotate: -7deg;
+		}
+		40% {
+			rotate: 7deg;
 		}
 	}
 	@keyframes fly-home {

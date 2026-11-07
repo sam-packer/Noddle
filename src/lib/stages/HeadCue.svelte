@@ -1,7 +1,37 @@
 <script lang="ts">
 	type Gesture = 'point' | 'nod' | 'shake';
 
-	let { gesture, size = 'clamp(120px, 28vw, 400px)' }: { gesture: Gesture; size?: string } = $props();
+	let {
+		gesture,
+		size = 'clamp(120px, 28vw, 400px)',
+		aim = null
+	}: {
+		gesture: Gesture;
+		size?: string;
+		/** For pointing, where on the screen to turn toward, as shares of its width and height. */
+		aim?: { x: number; y: number } | null;
+	} = $props();
+
+	/** Too near the middle to need an arrow: the head just faces forward. */
+	const ARROW_FROM = 0.25;
+
+	const aimed = $derived.by(() => {
+		if (gesture !== 'point' || !aim) return null;
+		const ax = (aim.x - 0.5) * 2;
+		const ay = (aim.y - 0.5) * 2;
+		const cardX = 268 + aim.x * 140;
+		const cardY = 48 + aim.y * 106;
+		return {
+			ax,
+			ay,
+			cardX,
+			cardY,
+			dotX: `${cardX + 17 - 355}px`,
+			dotY: `${cardY + 22 - 123}px`,
+			angle: (Math.atan2(ay, ax) * 180) / Math.PI,
+			arrow: Math.hypot(ax, ay) >= ARROW_FROM
+		};
+	});
 
 	/** So two pictures on one screen don't share a clip path. */
 	const uid = $props.id();
@@ -19,7 +49,18 @@
 	The picture without animation is the still frame for prefers-reduced-motion, so every base style
 	below shows the gesture's result and every animation only runs when motion is welcome.
 -->
-<svg class="cue {gesture}" viewBox="0 0 460 260" style:width={size} role="img" aria-label={LABELS[gesture]}>
+<svg
+	class="cue {gesture}"
+	class:aimed={!!aimed}
+	viewBox="0 0 460 260"
+	style:width={size}
+	style:--ax={aimed?.ax}
+	style:--ay={aimed?.ay}
+	style:--dot-x={aimed?.dotX}
+	style:--dot-y={aimed?.dotY}
+	role="img"
+	aria-label={LABELS[gesture]}
+>
 	<defs>
 		<clipPath id="{uid}-head">
 			<ellipse cx="126" cy="130" rx="66" ry="78" />
@@ -47,7 +88,21 @@
 	<rect class="base" x="246" y="204" width="214" height="16" rx="8" />
 	<rect class="screen" x="258" y="40" width="194" height="166" rx="12" />
 
-	{#if gesture === 'point'}
+	{#if aimed}
+		{#if aimed.arrow}
+			<path
+				class="arrow aim-arrow"
+				d="M 205 130 H 243 M 228 114 L 243 130 L 228 146"
+				transform="rotate({aimed.angle} 126 130)"
+			/>
+		{/if}
+		<rect class="card-dim" x={aimed.cardX} y={aimed.cardY} width="34" height="44" rx="6" />
+		<g class="aim-lit">
+			<rect class="halo" x={aimed.cardX - 6} y={aimed.cardY - 6} width="46" height="56" rx="10" />
+			<rect class="card-lit" x={aimed.cardX} y={aimed.cardY} width="34" height="44" rx="6" />
+		</g>
+		<circle class="dot aim-dot" cx="355" cy="123" r="11" />
+	{:else if gesture === 'point'}
 		<path class="arrow go-left" d="M 36 130 H 6 M 21 114 L 6 130 L 21 146" />
 		<path class="arrow go-right" d="M 218 130 H 248 M 233 114 L 248 130 L 233 146" />
 		<path class="arrow go-up" d="M 126 44 V 10 M 110 25 L 126 10 L 142 25" />
@@ -211,6 +266,14 @@
 		opacity: 1;
 	}
 
+	/* Turned toward the real target, instead of the general left, right, up, down. */
+	.point.aimed .p {
+		transform: translate(calc(var(--d) * var(--ax) * 34px), calc(var(--d) * var(--ay) * 28px));
+	}
+	.aim-dot {
+		transform: translate(var(--dot-x), var(--dot-y));
+	}
+
 	.nod .p {
 		transform: translate(0, calc(var(--d) * 26px));
 	}
@@ -332,6 +395,19 @@
 			animation-name: quarter-early;
 		}
 
+		.point.aimed .p {
+			animation: aim-face 3s infinite;
+		}
+		.aim-dot {
+			animation: aim-dot 3s infinite;
+		}
+		.aim-lit {
+			animation: aim-lit 3s infinite;
+		}
+		.aim-arrow {
+			animation: aim-arrow 3s infinite;
+		}
+
 		/* One dip and back, then the card pops and the result holds for over two seconds. */
 		.nod .p {
 			animation: nod-face 5s infinite;
@@ -382,6 +458,55 @@
 		}
 		.landed {
 			animation: shake-landed 5s infinite;
+		}
+	}
+
+	@keyframes aim-face {
+		0%,
+		10%,
+		92%,
+		100% {
+			transform: translate(0, 0);
+		}
+		32%,
+		82% {
+			transform: translate(calc(var(--d) * var(--ax) * 34px), calc(var(--d) * var(--ay) * 28px));
+		}
+	}
+	@keyframes aim-dot {
+		0%,
+		10%,
+		92%,
+		100% {
+			transform: translate(0, 0);
+		}
+		32%,
+		82% {
+			transform: translate(var(--dot-x), var(--dot-y));
+		}
+	}
+	@keyframes aim-lit {
+		0%,
+		30%,
+		88%,
+		100% {
+			opacity: 0;
+		}
+		34%,
+		82% {
+			opacity: 1;
+		}
+	}
+	@keyframes aim-arrow {
+		0%,
+		4%,
+		60%,
+		100% {
+			opacity: 0;
+		}
+		8%,
+		50% {
+			opacity: 1;
 		}
 	}
 

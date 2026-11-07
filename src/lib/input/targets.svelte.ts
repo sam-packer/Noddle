@@ -61,8 +61,6 @@ class Targets {
 	/** Nods that landed on nothing, so a stage can tell the player where to point. */
 	missedNods = $state(0);
 	onCancel: (() => void) | null = null;
-	/** Takes nods that landed on nothing, while a stage is asking for a nod without a target. */
-	onBareNod: ((onset: number) => void) | null = null;
 
 	private entries = new Map<string, Entry>();
 	private pendingSwitch: { id: string; since: number } | null = null;
@@ -231,8 +229,7 @@ class Targets {
 			})
 		});
 		if (!entry?.def.legal) {
-			if (this.onBareNod) this.onBareNod(onset);
-			else this.missedNods += 1;
+			this.missedNods += 1;
 			return;
 		}
 		if (entry.def.calib) engine.addSample(centreOf(entry.el), onset);
