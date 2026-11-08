@@ -12,12 +12,9 @@
 		{ x: 90, y: 20 },
 		{ x: 50, y: 58 }
 	];
-	/** Where the practice tile sits on the rack, for the picture to turn toward. */
-	const TILE_AIM = { x: 0.52, y: 0.8 };
 	/** The pointer wobbles over a card's edge, and the picture shouldn't restart each time it does. */
 	const LEFT_GOAL_MS = 500;
-	/** Nobody gets stuck if their nod or shake doesn't register. */
-	const PICK_PATIENCE_MS = 12000;
+	/** Nobody gets stuck if their shake doesn't register. */
 	const SHAKE_PATIENCE_MS = 8000;
 	/** Long enough to watch the tile land, and for the head to settle before there's a nod to catch. */
 	const AFTER_SHAKE_MS = 1100;
@@ -25,32 +22,26 @@
 
 	let step = $state(0);
 	let leaving = $state(false);
-	/** Pick the tile up, see it land in the wrong spot, then shake it home. */
-	let practice = $state<'pick' | 'wrong' | 'home'>('pick');
+	/** A tile drops onto the wrong spot by itself, and a shake sends it home. */
+	let practice = $state<'wrong' | 'home'>('wrong');
 	let canStart = $state(false);
 	const finished = $derived(step >= spots.length);
 	/** Fills as the head moves, and is full once the nod is big enough to count. */
 	const nodMeter = $derived(targets.focused ? engine.nodProgress : 0);
 	const needsAim = $derived(!finished && targets.missedNods > 0 && !targets.focused);
 
-	const goal = $derived.by(() => {
-		if (!finished) return `spot-${step}`;
-		return practice === 'pick' ? 'practice-tile' : 'start';
-	});
+	const goal = $derived(finished ? 'start' : `spot-${step}`);
 	let reached = $state<string | null>(null);
 	const onGoal = $derived(reached === goal);
 
 	const cue = $derived.by(() => {
 		if (onGoal) return 'nod';
-		return finished && practice !== 'pick' ? 'shake' : 'point';
+		return finished ? 'shake' : 'point';
 	});
-	const aim = $derived.by(() => {
-		if (!finished) return { x: spots[step].x / 100, y: spots[step].y / 100 };
-		return practice === 'pick' ? TILE_AIM : null;
-	});
+	const aim = $derived(finished ? null : { x: spots[step].x / 100, y: spots[step].y / 100 });
 	const word = $derived.by(() => {
 		if (onGoal) return 'Nod';
-		if (finished && practice !== 'pick') return 'Wrong spot! Shake';
+		if (finished) return 'Shake to undo';
 		return needsAim ? 'Aim first' : 'Turn your head';
 	});
 
@@ -65,14 +56,14 @@
 		return () => clearTimeout(timer);
 	});
 
-	// The shake only sends the tile home. A nod on Let's play is what moves on.
+	// The shake sends the tile home. A nod on Let's play is what moves on.
 	$effect(() =>
 		practice === 'wrong' && !leaving ? targets.claimCancel(() => (practice = 'home')) : undefined
 	);
 
 	$effect(() => {
 		if (!finished) return;
-		const wait = { pick: PICK_PATIENCE_MS, wrong: SHAKE_PATIENCE_MS, home: AFTER_SHAKE_MS }[practice];
+		const wait = practice === 'wrong' ? SHAKE_PATIENCE_MS : AFTER_SHAKE_MS;
 		const timer = setTimeout(() => (canStart = true), wait);
 		return () => clearTimeout(timer);
 	});
@@ -101,24 +92,12 @@
 				</div>
 				<div class="rack" aria-hidden="true">
 					{#each RACK as letter, i (i)}
-						<span class="square" class:rack-tile={letter}>{letter}</span>
+						<span class="square" class:rack-tile={letter} class:slot={!letter && practice === 'wrong'}>
+							{letter}
+						</span>
 					{/each}
 				</div>
-				<button
-					use:target={{
-						id: 'practice-tile',
-						legal: practice === 'pick' && !leaving,
-						calib: true,
-						confirm: () => (practice = 'wrong')
-					}}
-					class="tile"
-					class:ready={practice === 'pick'}
-					class:wrong={practice === 'wrong'}
-					class:flown={practice === 'home'}
-					class:focused={targets.focused === 'practice-tile'}
-				>
-					D
-				</button>
+				<span class="tile" class:wrong={practice === 'wrong'} class:flown={practice === 'home'}>D</span>
 			</div>
 			<div class="start-slot">
 				{#if canStart}
@@ -287,26 +266,19 @@
 		background: #fde047;
 		box-shadow: 0 0 0 3px white;
 	}
-	/* Starts in the gap on the rack, which it completes. */
-	.tile.ready,
+	/* Home is the gap on the rack, which it completes. */
 	.tile.flown {
 		transform: translate(var(--to-x), var(--to-y));
-	}
-	.tile.ready {
-		pointer-events: auto;
 	}
 	/* Landed somewhere it plainly shouldn't be, so there's a reason to undo. */
 	.tile.wrong {
 		background: #fca5a5;
 		box-shadow: 0 0 0 4px #dc2626;
-		transition: transform 350ms ease-out;
 	}
-	.tile.focused {
-		background: #fde047;
-		box-shadow:
-			0 0 0 5px white,
-			0 0 40px 12px rgb(253 224 71 / 0.9);
-		scale: 1.15;
+	/* Where it belongs, so the shake has somewhere to send it. */
+	.rack .slot {
+		outline: 3px dashed #fbbf24;
+		outline-offset: -3px;
 	}
 
 	.start-slot {
@@ -353,11 +325,10 @@
 	}
 
 	@media (prefers-reduced-motion: no-preference) {
-		.tile.ready:not(.focused) {
-			animation: waiting 1.1s ease-in-out infinite;
-		}
 		.tile.wrong {
-			animation: wrong-spot 1.1s ease-in-out infinite;
+			animation:
+				drop-in 450ms ease-in,
+				wrong-spot 1.1s 700ms ease-in-out infinite;
 		}
 		.tile.flown {
 			animation: fly-home 750ms ease-in-out;
@@ -369,15 +340,11 @@
 			animation: cheer 500ms 650ms ease-out;
 		}
 	}
-	@keyframes waiting {
-		0%,
-		100% {
-			box-shadow: 0 0 0 3px white;
-		}
-		50% {
-			box-shadow:
-				0 0 0 3px white,
-				0 0 22px 8px rgb(251 191 36 / 0.8);
+	/* Falls onto the board by itself: a mistake already made, waiting to be undone. */
+	@keyframes drop-in {
+		from {
+			opacity: 0;
+			transform: translateY(calc(var(--cell) * -1.5)) scale(1.4);
 		}
 	}
 	@keyframes wrong-spot {
