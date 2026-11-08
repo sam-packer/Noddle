@@ -410,7 +410,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="table">
-	<p class="headline" class:text-emerald-300={stage === 'done'}>{headline}</p>
+	<p class="headline" class:done={stage === 'done'}>{headline}</p>
 
 	<div class="rack">
 		{#each rack as tile, i (tile.id)}
@@ -711,6 +711,12 @@
 		font-size: 1.5rem;
 		font-weight: 600;
 		line-height: 2rem;
+	}
+	/* The Leave button is gone by the end, so the word sits centred over the board like the rack. */
+	.headline.done {
+		left: 0;
+		right: 1.5rem;
+		color: #6ee7b7;
 	}
 	/* Up high to save the neck, and stopping 120px short of the Leave button. */
 	/*

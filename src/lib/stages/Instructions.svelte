@@ -10,6 +10,7 @@
 	const spots = [
 		{ x: 10, y: 20 },
 		{ x: 90, y: 20 },
+		{ x: 10, y: 78 },
 		{ x: 50, y: 58 }
 	];
 	/** The pointer wobbles over a card's edge, and the picture shouldn't restart each time it does. */
