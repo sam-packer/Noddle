@@ -595,6 +595,8 @@ class VisionEngine {
 		this.headSmoothYaw.reset();
 		this.headSmoothPitch.reset();
 		this.nodStyle = null;
+		// Each face learns its own nod size and speed, which the next person mustn't inherit.
+		for (const track of this.tracks) track.gestures = new HeadGestures();
 		this.history = [];
 		this.recent = { free: [], calibrated: [], head: [] };
 		this.holdUntil = 0;

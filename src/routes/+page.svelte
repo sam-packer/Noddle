@@ -35,6 +35,8 @@
 	/** The instructions run once, before whatever the player opens first. */
 	let taught = false;
 	let afterInstructions: MenuChoice = 'multiplayer';
+	/** The gate goes straight to the lesson for the demo's next person, not to the menu. */
+	let demoRestarted = false;
 
 	let stage = $state<Stage>('gate');
 	let localUno = $state<GameSession<UnoView, UnoAction> | null>(null);
@@ -88,7 +90,10 @@
 
 	function next() {
 		if (stage === 'gate') {
-			if (!roomRequest) stage = 'menu';
+			if (demoRestarted) {
+				demoRestarted = false;
+				stage = 'instructions';
+			} else if (!roomRequest) stage = 'menu';
 			else stage = returningToRoom() ? 'room' : 'instructions';
 		} else if (stage === 'instructions') {
 			taught = true;
@@ -141,11 +146,15 @@
 		}
 	}
 
-	/** Back to the first screen of the demo, the lesson, ready for the next person. */
+	/**
+	 * Every restart is a new person, so nothing learned about the last one carries over: they nod
+	 * to take control, then get the lesson and the demo.
+	 */
 	function restartDemo() {
 		session.event('menu', { choice: 'demo-restart' });
+		handoff();
 		afterInstructions = 'demo';
-		stage = 'instructions';
+		demoRestarted = true;
 	}
 
 	function markMistake() {
@@ -170,6 +179,7 @@
 		closeLocalGames();
 		engine.release();
 		taught = false;
+		demoRestarted = false;
 		stage = 'gate';
 	}
 
