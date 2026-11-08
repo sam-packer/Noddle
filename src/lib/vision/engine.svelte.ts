@@ -87,6 +87,18 @@ const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 
 const HOLD_AFTER_GESTURE_MS = 400;
 /** Taking control is a clear nod, because anyone in view could trigger it by accident. */
 const LOCK_NOD_DEG = 3.5;
+/** Someone else only becomes the player once they're clearly more in front, so it doesn't flicker. */
+const PLAYER_SWITCH_RATIO = 1.25;
+/** After a handoff, the last player's nods are still finishing, and mustn't take control back. */
+const HANDOFF_QUIET_MS = 1500;
+
+/**
+ * How much a face looks like the player: the one sitting at the laptop is the biggest in the
+ * picture and near the middle. Someone beside them, or behind them, scores lower.
+ */
+function playerScore(box: FaceBox) {
+	return box.w * (1 - Math.min(1, Math.abs(box.cx - 0.5) * 1.2));
+}
 
 function clampToViewport(p: Point): Point {
 	return {
@@ -117,7 +129,7 @@ class VisionEngine {
 	freeMs = $state(0);
 	calibratedMs = $state(0);
 	faceCount = $state(0);
-	faces = $state<{ id: number; box: FaceBox; locked: boolean; inBounds: boolean }[]>([]);
+	faces = $state<{ id: number; box: FaceBox; locked: boolean; inBounds: boolean; player: boolean }[]>([]);
 	lock = $state<LockState>('searching');
 	yaw = $state(0);
 	pitch = $state(0);
@@ -182,6 +194,9 @@ class VisionEngine {
 	private nextTrackId = 1;
 	private lockedId: number | null = null;
 	private lockedLastSeen = 0;
+	/** The only face that can take control: the person in front of the screen. */
+	private playerId: number | null = null;
+	private lockQuietUntil = 0;
 	private lastTs = -1;
 	private fpsWindow: number[] = [];
 	private previews = new Set<HTMLCanvasElement>();
@@ -380,13 +395,19 @@ class VisionEngine {
 		const assigned = this.updateTracks(lms, ts);
 		let lockedFace: { lm: Lm[]; matrix: (typeof mats)[number] } | null = null;
 
-		for (const [track, i] of assigned) {
+		const angles = assigned.map(([track, i]) => {
 			const { yaw, pitch } = headAngles(mats[i].data);
 			track.inBounds =
 				track.box.w >= setup.minFaceWidth &&
 				track.box.w <= setup.maxFaceWidth &&
 				Math.abs(yaw) <= setup.maxPoseDeg &&
 				Math.abs(pitch) <= setup.maxPoseDeg;
+			return { yaw, pitch };
+		});
+		this.choosePlayer(assigned.map(([track]) => track));
+
+		for (const [n, [track, i]] of assigned.entries()) {
+			const { yaw, pitch } = angles[n];
 			const g = track.gestures.push(ts, yaw, pitch);
 			const isLocked = this.lockedId === track.id;
 			const turnedDown = track.gestures.rejected;
@@ -425,7 +446,8 @@ class VisionEngine {
 				this.lock !== 'locked' &&
 				g.kind === 'nod' &&
 				g.sizeDeg >= LOCK_NOD_DEG &&
-				track.inBounds
+				track.id === this.playerId &&
+				ts >= this.lockQuietUntil
 			) {
 				this.takeLock(track, ts);
 				lockedFace = { lm: lms[i], matrix: mats[i] };
@@ -441,7 +463,8 @@ class VisionEngine {
 			id: t.id,
 			box: t.box,
 			locked: t.id === this.lockedId,
-			inBounds: t.inBounds
+			inBounds: t.inBounds,
+			player: t.id === this.playerId
 		}));
 
 		let activePoint: Point | null = null;
@@ -535,6 +558,32 @@ class VisionEngine {
 		return assigned;
 	}
 
+	/**
+	 * Picks who may take control, from the faces seen this frame. While someone is in control it's
+	 * them. Otherwise it's whoever is most in front, and it only moves to someone else once they're
+	 * clearly more so, so two people side by side don't swap back and forth.
+	 */
+	private choosePlayer(seen: Track[]) {
+		const locked = this.lock === 'locked' && seen.find((t) => t.id === this.lockedId);
+		if (locked) {
+			this.playerId = locked.id;
+			return;
+		}
+		// Mid-game, only someone where the player was can take back control, so a neighbour nodding
+		// along can't. A handoff clears this, and the next person can sit anywhere.
+		const was = this.lock === 'searching' ? null : this.lastLockedBox;
+		const eligible = seen.filter(
+			(t) => t.inBounds && (!was || Math.hypot(t.box.cx - was.cx, t.box.cy - was.cy) < was.w * 1.5)
+		);
+		const best = eligible.reduce<Track | null>(
+			(top, t) => (!top || playerScore(t.box) > playerScore(top.box) ? t : top),
+			null
+		);
+		const current = eligible.find((t) => t.id === this.playerId);
+		if (!current || !best) this.playerId = best?.id ?? null;
+		else if (playerScore(best.box) > playerScore(current.box) * PLAYER_SWITCH_RATIO) this.playerId = best.id;
+	}
+
 	private takeLock(track: Track, ts: number) {
 		// A different person taking over after a loss must not inherit calibration.
 		const previous = this.lastLockedBox;
@@ -559,7 +608,9 @@ class VisionEngine {
 
 	/** Locks the first visible face without a nod, for keyboard start and for diagnosis. */
 	lockFirst() {
-		if (this.lock !== 'locked' && this.tracks[0]) this.takeLock(this.tracks[0], this.lastTs);
+		if (this.lock === 'locked') return;
+		const track = this.tracks.find((t) => t.id === this.playerId) ?? this.tracks[0];
+		if (track) this.takeLock(track, this.lastTs);
 	}
 
 	/** The current head position becomes the centre of the screen. */
@@ -582,7 +633,9 @@ class VisionEngine {
 	release() {
 		this.lockedId = null;
 		this.lastLockedBox = null;
+		this.playerId = null;
 		this.lock = 'searching';
+		this.lockQuietUntil = this.lastTs + HANDOFF_QUIET_MS;
 		this.resetCalibration();
 	}
 
@@ -914,8 +967,9 @@ class VisionEngine {
 			for (const f of this.faces) {
 				const x = (f.box.cx - f.box.w / 2) * cw;
 				const y = (f.box.cy - f.box.h / 2) * ch;
-				ctx.lineWidth = f.locked ? 4 : 2;
-				ctx.strokeStyle = f.locked ? '#22c55e' : f.inBounds ? '#facc15' : '#ef4444';
+				// Only the player stands out. Anyone else is watching, and their nods do nothing.
+				ctx.lineWidth = f.locked || f.player ? 6 : 2;
+				ctx.strokeStyle = f.locked ? '#22c55e' : f.player ? '#facc15' : '#64748b';
 				ctx.strokeRect(x, y, f.box.w * cw, f.box.h * ch);
 			}
 			ctx.restore();

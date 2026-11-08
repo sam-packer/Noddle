@@ -4,6 +4,8 @@
 
 	const anyInBounds = $derived(engine.faces.some((f) => f.inBounds));
 	const ready = $derived(engine.status === 'ready' && anyInBounds);
+	/** With others in view, it has to be clear that only one of them is the player. */
+	const crowd = $derived(engine.faces.length > 1);
 </script>
 
 <div class="flex h-full flex-col items-center justify-center gap-8 text-center">
@@ -26,7 +28,10 @@
 			{:else if !anyInBounds}
 				<p class="text-3xl text-amber-300">Step closer and face the screen</p>
 			{:else}
-				<p class="text-5xl font-bold text-emerald-300">Nod to take control</p>
+				<p class="text-5xl font-bold text-emerald-300">
+					{#if crowd}<span class="text-yellow-300">Yellow box:</span>{/if}
+					Nod to take control
+				</p>
 				<HeadCue gesture="nod" size="min(38vw, 62vh)" />
 			{/if}
 		</div>
