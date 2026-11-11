@@ -1,17 +1,20 @@
 import { defineConfig } from 'drizzle-kit';
 
-if (!process.env.CLOUDFLARE_ACCOUNT_ID) throw new Error('CLOUDFLARE_ACCOUNT_ID is not set');
-if (!process.env.CLOUDFLARE_DATABASE_ID) throw new Error('CLOUDFLARE_DATABASE_ID is not set');
-if (!process.env.CLOUDFLARE_D1_TOKEN) throw new Error('CLOUDFLARE_D1_TOKEN is not set');
+// Migrations are applied by `wrangler d1 migrations apply` (see deploy:rooms), never by drizzle-kit,
+// so only Studio talks to the database and needs credentials. `db:generate` works without them.
+const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, CLOUDFLARE_D1_TOKEN } = process.env;
+if (process.argv.includes('studio') && !(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_DATABASE_ID && CLOUDFLARE_D1_TOKEN)) {
+	throw new Error('db:studio needs CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID and CLOUDFLARE_D1_TOKEN in .env');
+}
 
 export default defineConfig({
 	schema: './src/lib/server/db/schema.ts',
 	dialect: 'sqlite',
 	driver: 'd1-http',
 	dbCredentials: {
-		accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-		databaseId: process.env.CLOUDFLARE_DATABASE_ID,
-		token: process.env.CLOUDFLARE_D1_TOKEN
+		accountId: CLOUDFLARE_ACCOUNT_ID ?? '',
+		databaseId: CLOUDFLARE_DATABASE_ID ?? '',
+		token: CLOUDFLARE_D1_TOKEN ?? ''
 	},
 	verbose: true,
 	strict: true

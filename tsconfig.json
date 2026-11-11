@@ -12,6 +12,7 @@
 	"include": [
 		"src",
 		"workers",
+		"scripts",
 		"vite.config.ts",
 		"drizzle.config.ts"
 	]

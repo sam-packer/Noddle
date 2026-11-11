@@ -10,8 +10,13 @@ import { loadRuns, scoreRuns } from './trials';
 const PATH = 'scripts/baseline.json';
 const replay = spawnSync('bun', ['scripts/replay.ts'], { encoding: 'utf8' });
 const match = replay.stdout.match(/(\d+) difference\(s\)/);
+// A crashed or changed replay must fail the gate, not score as zero differences.
+if (replay.status !== 0 || !match) {
+	console.log(`Replay did not finish (exit ${replay.status}):\n${replay.stderr || replay.stdout}`);
+	process.exit(1);
+}
 const now = {
-	labelDifferences: match ? Number(match[1]) : 0,
+	labelDifferences: Number(match[1]),
 	testRuns: loadRuns().map((r) => [r.name, scoreRuns([r]).value] as const)
 };
 

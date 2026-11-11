@@ -27,9 +27,21 @@ To deploy:
 bun run deploy
 ```
 
-That applies any new D1 migrations, deploys the rooms worker to `noddle-rooms.sampacker.com`, then builds and deploys the app to `noddle.sampacker.com`. In Cloudflare Workers Builds, connect the repo to the `noddle` Worker, leave the build command empty and set the deploy command to `bun run deploy`.
+That type-checks and builds the app first, so nothing remote changes if either fails. Then it applies any new D1 migrations, deploys the rooms worker to `noddle-rooms.sampacker.com`, and deploys the app to `noddle.sampacker.com`. In Cloudflare Workers Builds, connect the repo to the `noddle` Worker, leave the build command empty and set the deploy command to `bun run deploy`. Turn off builds for non-production branches, or they'll fail looking for a build that never ran.
 
-`PUBLIC_ROOMS_URL` is fixed at build time, so it's set in the `deploy:app` script.
+`PUBLIC_ROOMS_URL` is fixed at build time and comes from `.env.production`. `vite dev` leaves it unset and uses port 8787 on the same machine.
+
+## Development
+
+```sh
+bun install          # also generates worker-configuration.d.ts
+bun run dev          # the app alone
+bun run check        # regenerates the worker types, then type-checks everything, scripts included
+bun run db:generate  # a new migration after changing src/lib/server/db/schema.ts; deploy applies it
+bun run update:model # fetch Google's latest face landmarker model
+```
+
+`worker-configuration.d.ts` isn't committed. `bun install` and `bun run check` regenerate it, so you never need to run `wrangler types` yourself. Migrations are only ever applied by `wrangler d1 migrations apply`, never by drizzle-kit, so the two can't disagree about what has run. MediaPipe's runtime comes straight from the installed package, so `bun update` updates it too.
 
 ## Code layout
 
@@ -37,61 +49,6 @@ That applies any new D1 migrations, deploys the rooms worker to `noddle-rooms.sa
 - `src/lib/session`: the Game Session the screens talk to, with demo, local and remote versions. Screens don't know which they have.
 - `src/lib/stages`: the screens.
 - `src/lib/vision`, `src/lib/input`: head tracking and targets. Run `bun run gate` after changing these, and try it on a real head.
-
-# sv
-
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
-
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-bun x sv@1.3.0 create --template minimal --types ts --add tailwindcss="plugins:typography,forms" sveltekit-adapter="adapter:cloudflare+cfTarget:workers" drizzle="database:d1" ai-tools="ide:claude-code,other+delivery:plugin+optInSkills:svelte-mcp-feedback" --install bun triangle-ai-hackathon
-```
-
-## Adding features
-
-Add features to your project with `sv add`:
-
-```sh
-npx sv add
-```
-
-For example, to add Tailwind CSS:
-
-```sh
-npx sv add tailwindcss
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
 
 ## Tuning head tracking from recordings
 
