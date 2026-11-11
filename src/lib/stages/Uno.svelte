@@ -1,14 +1,16 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
+	import { innerWidth as viewportWidth } from 'svelte/reactivity/window';
 	import { crossfade, fade, fly, scale } from 'svelte/transition';
 	import type { Card as EngineCard, Color, PlayedCard, UnoAction, UnoView } from '../games/uno/engine';
 	import { CARD_MS, type GameSession } from '../session/types';
-	import { target, targets } from '../input/targets.svelte';
+	import { target } from '../input/targets.svelte';
 	import { session as log } from '../session';
 	import Confetti from './Confetti.svelte';
 	import GameExit from './GameExit.svelte';
+	import { gameEnd } from './gameEnd.svelte';
 
 	let {
 		session,
@@ -46,10 +48,15 @@
 		wild: 'W',
 		wild4: '+4'
 	};
-	/** The most cards that fit in a row at their full size. A longer hand is paged. */
-	const PAGE_SIZE = 7;
-	/** A stray nod just after the game ends must not choose what happens next. */
-	const END_BUTTONS_DELAY_MS = 1500;
+	/** The most cards a row shows, however wide the screen. A longer hand is paged. */
+	const MAX_PAGE_SIZE = 7;
+	/** A card and the gap between cards, in rem, as in the styles below. */
+	const CARD_REM = 7;
+	const CARD_GAP_REM = 1.1;
+	/** Kept clear at each end of the hand for a paging arrow, and the space beside it. */
+	const ARROW_LANE_REM = 9.75;
+	/** A Wild the session never answers goes back in the hand, so the game can't get stuck on it. */
+	const WILD_ANSWER_MS = 5000;
 	/** A drawn card's trip from the pile, and the gap between cards when several are drawn. */
 	const DRAW_MS = 650;
 	const DRAW_STAGGER_MS = 130;
@@ -74,8 +81,61 @@
 	/** Its colour, once chosen. The card stays on the pile until the session confirms the move. */
 	let pendingColor = $state<Color | null>(null);
 	let leaving = $state(false);
-	let page = $state(0);
-	let endButtons = $state(false);
+	/** The page the player or the game last chose. */
+	let wantedPage = $state(0);
+
+	/** Timers that change what is shown, stopped with the screen or when a new game starts. */
+	const timers = new Set<ReturnType<typeof setTimeout>>();
+	function later(run: () => void, ms: number) {
+		const timer = setTimeout(() => {
+			timers.delete(timer);
+			run();
+		}, ms);
+		timers.add(timer);
+	}
+	function stopTimers() {
+		for (const timer of timers) clearTimeout(timer);
+		timers.clear();
+	}
+	onDestroy(stopTimers);
+
+	// Before anything that watches the hand, so a new game's cards are all new to it.
+	const end = gameEnd({
+		ended: () => snap.ended,
+		onDone: () => onDone(),
+		onEnd: () => {
+			leaving = false;
+			pendingWild = null;
+			pendingColor = null;
+		},
+		onNewGame: () => {
+			stopTimers();
+			known.clear();
+			arriving = new Set();
+			fresh = [];
+			flights = [];
+			drew = {};
+			seenCounts = null;
+			pendingWild = null;
+			pendingColor = null;
+			wantedPage = 0;
+		}
+	});
+
+	const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+	/** As many cards as fit between the paging arrows at their full size, so none runs under one. */
+	const pageSize = $derived(
+		Math.max(
+			1,
+			Math.min(
+				MAX_PAGE_SIZE,
+				Math.floor(
+					((viewportWidth.current ?? 1280) / rem - 2 * ARROW_LANE_REM + CARD_GAP_REM) /
+						(CARD_REM + CARD_GAP_REM)
+				)
+			)
+		)
+	);
 
 	const seats = $derived(
 		(POSITIONS[view.players] ?? []).map((position, i) => ({
@@ -84,8 +144,10 @@
 		}))
 	);
 	const hand = $derived(view.hand.filter((c) => c.id !== pendingWild?.id));
-	const pageCount = $derived(Math.max(1, Math.ceil(hand.length / PAGE_SIZE)));
-	const shown = $derived(hand.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
+	const pageCount = $derived(Math.max(1, Math.ceil(hand.length / pageSize)));
+	/** The page asked for, or the last one if the hand has since got shorter. */
+	const page = $derived(Math.min(wantedPage, pageCount - 1));
+	const shown = $derived(hand.slice(page * pageSize, (page + 1) * pageSize));
 	const discard = $derived<Card[]>(
 		pendingWild && !view.discard.some((c) => c.id === pendingWild?.id)
 			? [...view.discard, { ...pendingWild, by: me, shown: pendingColor ?? undefined }]
@@ -96,9 +158,9 @@
 	const glowColor = $derived(glow.shown ?? glow.color);
 	const picking = $derived(pendingWild !== null && pendingColor === null);
 	const myMove = $derived(
-		!pendingWild && !snap.ended && (view.legal.cards.length > 0 || view.legal.draw || view.legal.keep)
+		!pendingWild && !end.over && (view.legal.cards.length > 0 || view.legal.draw || view.legal.keep)
 	);
-	const pageOf = (id: number) => Math.floor(hand.findIndex((c) => c.id === id) / PAGE_SIZE);
+	const pageOf = (id: number) => Math.floor(hand.findIndex((c) => c.id === id) / pageSize);
 	const legalPages = $derived(
 		view.legal.cards.filter((id) => hand.some((c) => c.id === id)).map(pageOf)
 	);
@@ -107,19 +169,15 @@
 	const legalKey = $derived(`${view.legal.cards.join()}|${view.drawnId}`);
 	const activeName = $derived(snap.active === null ? null : snap.names[snap.active]);
 
-	$effect(() => {
-		if (page >= pageCount) page = pageCount - 1;
-	});
-
 	// When the options change, open on a page with a move on it. After that the page is the
 	// player's to change, even to look at cards they can't play.
 	$effect(() => {
 		void legalKey;
 		untrack(() => {
 			if (view.drawnId !== null && hand.some((c) => c.id === view.drawnId)) {
-				page = pageOf(view.drawnId);
+				wantedPage = pageOf(view.drawnId);
 			} else if (legalPages.length && !legalPages.includes(page)) {
-				page = legalPages[0];
+				wantedPage = legalPages[0];
 			}
 		});
 	});
@@ -132,6 +190,14 @@
 			pendingWild = null;
 			pendingColor = null;
 		}
+	});
+	$effect(() => {
+		if (pendingColor === null) return;
+		const timer = setTimeout(() => {
+			pendingWild = null;
+			pendingColor = null;
+		}, WILD_ANSWER_MS);
+		return () => clearTimeout(timer);
 	});
 
 	// What the player could see, so the session log says what they were trying to do.
@@ -152,23 +218,6 @@
 	const rejectedCount = $derived(snap.rejected?.n ?? 0);
 	$effect(() => {
 		if (rejectedCount) log.event('rejected', { reason: untrack(() => snap.rejected?.reason) });
-	});
-
-	// A scripted ending moves on by itself. A real one waits for the player to choose.
-	// Keyed on plain values, because each session update is a new object and must not restart this.
-	const hasEnded = $derived(!!snap.ended);
-	const advanceMs = $derived(snap.ended?.advanceMs);
-	$effect(() => {
-		if (!hasEnded) {
-			endButtons = false;
-			return;
-		}
-		const delay = advanceMs;
-		const timer = setTimeout(() => {
-			if (delay !== undefined) onDone();
-			else endButtons = true;
-		}, delay ?? END_BUTTONS_DELAY_MS);
-		return () => clearTimeout(timer);
 	});
 
 	function play(card: EngineCard) {
@@ -216,10 +265,10 @@
 		const [first] = arriving;
 		const landed = [...arriving];
 		untrack(() => {
-			page = Math.max(0, pageOf(first));
+			wantedPage = Math.max(0, pageOf(first));
 			fresh = landed;
 		});
-		setTimeout(
+		later(
 			() => (fresh = fresh.filter((id) => !landed.includes(id))),
 			DRAW_MS + landed.length * DRAW_STAGGER_MS + FRESH_MS
 		);
@@ -241,7 +290,7 @@
 		}));
 		flights = [...flights, ...added];
 		const ids = added.map((f) => f.id);
-		setTimeout(
+		later(
 			() => (flights = flights.filter((f) => !ids.includes(f.id))),
 			DRAW_MS + count * DRAW_STAGGER_MS
 		);
@@ -279,7 +328,7 @@
 				launch(el, more, BACK_SCALE);
 				const id = ++flightId;
 				drew = { ...drew, [seat]: { n: more, id, land: DRAW_MS + (more - 1) * DRAW_STAGGER_MS } };
-				setTimeout(() => {
+				later(() => {
 					if (drew[seat]?.id !== id) return;
 					const { [seat]: _gone, ...rest } = drew;
 					drew = rest;
@@ -377,7 +426,6 @@
 			confirm: () => session.send({ type: 'draw' })
 		}}
 		class="uno-card pile"
-		class:focused={targets.focused === 'draw'}
 		class:off={!view.legal.draw || !!pendingWild}
 	>
 		Draw
@@ -407,7 +455,7 @@
 	</div>
 
 	<div class="status">
-		{#if snap.ended?.advanceMs !== undefined}
+		{#if snap.ended && end.scripted}
 			<div in:scale={{ start: 0.5, duration: 350 }}>
 				<p class="uno-call">{snap.ended.title}</p>
 				<p>{snap.ended.text}</p>
@@ -421,7 +469,7 @@
 			{:else}
 				<p>Nothing to play. Point at Draw and nod</p>
 			{/if}
-		{:else if !pendingWild && !snap.ended}
+		{:else if !pendingWild && !end.over}
 			<p class="text-slate-300">{snap.note || (activeName ? `${activeName} is playing` : 'Nice')}</p>
 		{/if}
 	</div>
@@ -433,11 +481,16 @@
 				animate:flip={{ duration: 300 }}
 				in:dealt={{ card }}
 				out:send={{ key: card.id }}
-				use:target={{ id: `card-${card.id}`, legal: legal && !leaving, calib: true, confirm: () => play(card) }}
+				use:target={{
+					id: `card-${card.id}`,
+					legal: legal && !leaving,
+					calib: true,
+					group: 'hand',
+					confirm: () => play(card)
+				}}
 				class="uno-card"
 				class:dim={!legal}
 				class:fresh={fresh.includes(card.id)}
-				class:focused={targets.focused === `card-${card.id}`}
 				style:background={COLORS[card.color]}
 			>
 				{@render face(card)}
@@ -451,12 +504,11 @@
 			use:target={{
 				id: 'page-back',
 				legal: page > 0 && !pendingWild && !leaving,
-				confirm: () => (page -= 1)
+				confirm: () => (wantedPage = page - 1)
 			}}
 			class="arrow"
 			style="left:0.75rem"
 			class:gone={page === 0}
-			class:focused={targets.focused === 'page-back'}
 		>
 			‹{#if legalBefore}<small>{legalBefore} to play</small>{/if}
 		</button>
@@ -464,12 +516,11 @@
 			use:target={{
 				id: 'page-next',
 				legal: page < pageCount - 1 && !pendingWild && !leaving,
-				confirm: () => (page += 1)
+				confirm: () => (wantedPage = page + 1)
 			}}
 			class="arrow"
 			style="right:0.75rem"
 			class:gone={page === pageCount - 1}
-			class:focused={targets.focused === 'page-next'}
 		>
 			›{#if legalAfter}<small>{legalAfter} to play</small>{/if}
 		</button>
@@ -491,21 +542,13 @@
 
 	{#if snap.ended?.won}<Confetti />{/if}
 
-	<GameExit
-		show={snap.canLeave && !snap.ended && !pendingWild && !view.legal.keep}
-		bind:leaving
-		onExit={restartDemo ?? onExit}
-		question={restartDemo ? 'Restart the demo?' : undefined}
-		label={restartDemo ? 'Restart' : undefined}
-		icon={restartDemo ? '↺' : undefined}
-	/>
+	<GameExit show={snap.canLeave && !end.over && !pendingWild && !view.legal.keep} bind:leaving {onExit} {restartDemo} />
 
 	{#if view.legal.keep && !pendingWild && !leaving}
 		<button
 			transition:fade={{ duration: 200 }}
 			use:target={{ id: 'keep', legal: true, confirm: () => session.send({ type: 'pass' }) }}
 			class="close-picker keep"
-			class:focused={targets.focused === 'keep'}
 		>
 			Keep<span>End your turn</span>
 		</button>
@@ -520,23 +563,27 @@
 			transition:fade={{ duration: 200 }}
 			use:target={{ id: 'pick-close', legal: !leaving, confirm: takeBackWild }}
 			class="close-picker"
-			class:focused={targets.focused === 'pick-close'}
 		>
 			✕<span>Take back</span>
 		</button>
 		{#each corners as c (c.color)}
 			<button
 				transition:fade={{ duration: 200 }}
-				use:target={{ id: `pick-${c.color}`, legal: !leaving, calib: true, confirm: () => chooseColor(c.color) }}
+				use:target={{
+					id: `pick-${c.color}`,
+					legal: !leaving,
+					calib: true,
+					group: 'colours',
+					confirm: () => chooseColor(c.color)
+				}}
 				class="picker"
-				class:focused={targets.focused === `pick-${c.color}`}
 				style="{c.style};background:{COLORS[c.color]}"
 				aria-label={c.color}
 			></button>
 		{/each}
 	{/if}
 
-	{#if snap.ended && snap.ended.advanceMs === undefined}
+	{#if snap.ended && !end.scripted}
 		<div in:fade={{ duration: 250 }} class="pointer-events-none absolute inset-0 z-[5] bg-black/80"></div>
 		<div class="end-title" in:scale={{ start: 0.5, duration: 350 }}>
 			<p class="uno-call">{snap.ended.title}</p>
@@ -544,21 +591,19 @@
 		</div>
 		{#if snap.canRestart && session.restart}
 			<button
-				use:target={{ id: 'again', legal: endButtons, confirm: () => session.restart?.() }}
+				use:target={{ id: 'again', legal: end.buttons && !leaving, confirm: () => session.restart?.() }}
 				class="end-choice"
 				style="left:14%;background:#15803d"
-				class:off={!endButtons}
-				class:focused={targets.focused === 'again'}
+				class:off={!end.buttons}
 			>
 				Play again
 			</button>
 		{/if}
 		<button
-			use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
+			use:target={{ id: 'menu', legal: end.buttons && !leaving, confirm: onExit }}
 			class="end-choice"
 			style="right:14%;background:#334155"
-			class:off={!endButtons}
-			class:focused={targets.focused === 'menu'}
+			class:off={!end.buttons}
 		>
 			✕ Menu
 		</button>
@@ -639,10 +684,11 @@
 		position: absolute;
 		inset: 0;
 	}
+	/* On a short screen, kept below the hand rather than over it. */
 	.status {
 		position: absolute;
 		left: 0;
-		top: 84%;
+		top: max(84%, calc(54% + 11rem));
 		width: 100%;
 		text-align: center;
 		font-size: 1.9rem;
@@ -744,7 +790,11 @@
 			scale: 1;
 		}
 	}
-	.focused {
+	.uno-card:global([data-focused]),
+	.arrow:global([data-focused]),
+	.close-picker:global([data-focused]),
+	.picker:global([data-focused]),
+	.end-choice:global([data-focused]) {
 		z-index: 3;
 		transform: translateY(calc(-1.6rem + var(--press, 0) * 1.6rem))
 			scale(calc(1.16 - var(--press, 0) * 0.1));
@@ -887,7 +937,7 @@
 			transform 90ms ease-out,
 			opacity 200ms;
 	}
-	.picker.focused {
+	.picker:global([data-focused]) {
 		transform: none;
 		box-shadow:
 			inset 0 0 0 calc(12px + var(--press, 0) * 24px) white,

@@ -1,24 +1,29 @@
 <script lang="ts">
-	import { target, targets } from '../input/targets.svelte';
+	import { target } from '../input/targets.svelte';
 
 	/**
 	 * The way out of anything that takes the player back to the menu. Leaving is never one nod away:
 	 * the button only asks, and the safe answer is the one nearer that button, so a head drifting
 	 * down from it reaches the stay answer first.
+	 *
+	 * Whatever hides the button also closes the question, so it never outlives the game it was about.
 	 */
 	let {
 		show,
 		leaving = $bindable(false),
 		onExit,
-		question = 'Leave this game?',
+		restartDemo,
+		question = restartDemo ? 'Restart the demo?' : 'Leave this game?',
 		stay = '✕ Keep playing',
-		label = 'Leave',
-		icon = '✕',
+		label = restartDemo ? 'Restart' : 'Leave',
+		icon = restartDemo ? '↺' : '✕',
 		bottom = false
 	}: {
 		show: boolean;
 		leaving?: boolean;
 		onExit: () => void;
+		/** In the demo, the corner button starts it over instead of leaving. */
+		restartDemo?: () => void;
 		question?: string;
 		stay?: string;
 		label?: string;
@@ -26,6 +31,10 @@
 		/** For a screen with something else in the top corner. */
 		bottom?: boolean;
 	} = $props();
+
+	$effect(() => {
+		if (!show) leaving = false;
+	});
 </script>
 
 {#if show && !leaving}
@@ -33,27 +42,18 @@
 		use:target={{ id: 'leave', legal: true, deliberate: true, confirm: () => (leaving = true) }}
 		class="leave"
 		class:bottom
-		class:focused={targets.focused === 'leave'}
 	>
 		{icon}<span>{label}</span>
 	</button>
 {/if}
 
-{#if leaving}
+{#if show && leaving}
 	<div class="veil"></div>
 	<p class="ask">{question}</p>
-	<button
-		use:target={{ id: 'leave-no', legal: true, confirm: () => (leaving = false) }}
-		class="answer stay"
-		class:focused={targets.focused === 'leave-no'}
-	>
+	<button use:target={{ id: 'leave-no', legal: true, confirm: () => (leaving = false) }} class="answer stay">
 		{stay}
 	</button>
-	<button
-		use:target={{ id: 'leave-yes', legal: true, confirm: onExit }}
-		class="answer go"
-		class:focused={targets.focused === 'leave-yes'}
-	>
+	<button use:target={{ id: 'leave-yes', legal: true, confirm: restartDemo ?? onExit }} class="answer go">
 		{label}
 	</button>
 {/if}
@@ -124,7 +124,8 @@
 		left: 12%;
 		background: #b91c1c;
 	}
-	.focused {
+	.leave:global([data-focused]),
+	.answer:global([data-focused]) {
 		transform: scale(calc(1.06 - var(--press, 0) * 0.06));
 		box-shadow:
 			0 0 0 4px #fde047,
