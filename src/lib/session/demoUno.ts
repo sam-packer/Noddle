@@ -7,6 +7,7 @@ import {
 	type DemoAction,
 	type DemoUno
 } from '../games/uno/demo';
+import { RuleError } from '../games/rng';
 import { viewFor, type UnoAction, type UnoView } from '../games/uno/engine';
 import { SnapshotStore } from './store';
 import {
@@ -59,7 +60,8 @@ export class DemoUnoSession implements GameSession<UnoView, UnoAction> {
 		try {
 			this.demo = demoApply(this.demo, action as DemoAction);
 		} catch (e) {
-			this.store.reject((e as Error).message);
+			if (!(e instanceof RuleError)) throw e;
+			this.store.reject(e);
 			return;
 		}
 		this.busy = true;

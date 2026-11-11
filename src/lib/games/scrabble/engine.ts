@@ -77,7 +77,7 @@ function fullBag(): Tile[] {
 }
 
 export function newGame({ players, seed }: { players: number; seed: number }): ScrabbleState {
-	if (!Number.isInteger(players) || players < 2 || players > 4) throw new RuleError('Scrabble needs 2 to 4 players');
+	if (!Number.isInteger(players) || players < 2 || players > 4) throw new RuleError('bad-setup', 'Scrabble needs 2 to 4 players');
 	const shuffled = shuffle(fullBag(), seed >>> 0);
 	const bag = shuffled.items;
 	const racks = Array.from({ length: players }, () => bag.splice(-RACK_SIZE));
@@ -147,14 +147,14 @@ export function readPlay(board: Board, tiles: (PlaceTile & { blank: boolean })[]
 	const placed = new Map(tiles.map((t) => [`${t.r},${t.c}`, t]));
 	const rows = new Set(tiles.map((t) => t.r));
 	const cols = new Set(tiles.map((t) => t.c));
-	if (rows.size > 1 && cols.size > 1) throw new RuleError('Tiles must be in one line.');
+	if (rows.size > 1 && cols.size > 1) throw new RuleError('not-in-line', 'Tiles must be in one line.');
 	const first = tiles[0];
 	const across =
 		rows.size === 1 && (cols.size > 1 || wordThrough(board, placed, first.r, first.c, 0, 1).length > 1);
 	const [dr, dc] = across ? [0, 1] : [1, 0];
 	const main = wordThrough(board, placed, first.r, first.c, dr, dc);
 	if (!tiles.every((t) => main.some((m) => m.r === t.r && m.c === t.c))) {
-		throw new RuleError('Tiles must connect with no gaps.');
+		throw new RuleError('has-gaps', 'Tiles must connect with no gaps.');
 	}
 	const words = [main];
 	for (const t of tiles) {
@@ -174,23 +174,23 @@ const text = (cells: Cell[]) => cells.map((c) => c.letter).join('');
 
 /** Checks a whole play against the rules. Breaking one throws RuleError, with a reason to show. */
 export function checkPlay(s: ScrabbleState, tiles: PlaceTile[], lexicon: Lexicon): PlayVerdict {
-	if (!tiles.length) throw new RuleError('Place a tile first.');
+	if (!tiles.length) throw new RuleError('no-tiles', 'Place a tile first.');
 	const rack = s.racks[s.current];
 	const seen = new Set<string>();
 	const usedIds = new Set<number>();
 	const checked = tiles.map((t) => {
 		const key = `${t.r},${t.c}`;
 		if (!Number.isInteger(t.r) || !Number.isInteger(t.c) || t.r < 0 || t.r >= SIZE || t.c < 0 || t.c >= SIZE) {
-			throw new RuleError("That square isn't on the board.");
+			throw new RuleError('off-board', "That square isn't on the board.");
 		}
-		if (s.board[key] || seen.has(key)) throw new RuleError('That square is taken.');
+		if (s.board[key] || seen.has(key)) throw new RuleError('square-taken', 'That square is taken.');
 		seen.add(key);
 		const tile = rack.find((x) => x.id === t.tileId);
-		if (!tile || usedIds.has(t.tileId)) throw new RuleError("That tile isn't on your rack.");
+		if (!tile || usedIds.has(t.tileId)) throw new RuleError('not-your-tile', "That tile isn't on your rack.");
 		usedIds.add(t.tileId);
 		const blank = tile.letter === '?';
 		if (blank ? !/^[A-Z]$/.test(t.letter) : t.letter !== tile.letter) {
-			throw new RuleError("That tile doesn't match.");
+			throw new RuleError('tile-mismatch', "That tile doesn't match.");
 		}
 		return { ...t, blank };
 	});
@@ -199,14 +199,14 @@ export function checkPlay(s: ScrabbleState, tiles: PlaceTile[], lexicon: Lexicon
 	const empty = Object.keys(s.board).length === 0;
 	if (empty) {
 		if (!tiles.some((t) => t.r === CENTRE && t.c === CENTRE)) {
-			throw new RuleError('The first word must cover the centre square.');
+			throw new RuleError('must-cover-centre', 'The first word must cover the centre square.');
 		}
 	} else if (!read.cells.some((c) => !c.fresh) && read.words.length === 1) {
-		throw new RuleError('Your word has to connect to the board.');
+		throw new RuleError('not-connected', 'Your word has to connect to the board.');
 	}
 	for (const cells of read.words) {
 		const word = text(cells);
-		if (word.length < 2 || !lexicon.has(word)) throw new RuleError(`${word} isn't in the dictionary.`);
+		if (word.length < 2 || !lexicon.has(word)) throw new RuleError('not-a-word', `${word} isn't in the dictionary.`);
 	}
 	return { main: text(read.cells), words: read.words.map(text), score: read.score, bingo: read.bingo };
 }
@@ -233,8 +233,8 @@ function endTurn(s: ScrabbleState) {
 
 /** Returns the next state. The given state is never changed. Breaking the rules throws RuleError. */
 export function apply(state: ScrabbleState, action: ScrabbleAction, lexicon: Lexicon): ScrabbleState {
-	if (state.phase === 'over') throw new RuleError('The game is over.');
-	if (action.seat !== state.current) throw new RuleError("It isn't your turn.");
+	if (state.phase === 'over') throw new RuleError('game-over', 'The game is over.');
+	if (action.seat !== state.current) throw new RuleError('not-your-turn', "It isn't your turn.");
 	const seat = action.seat;
 
 	if (action.type === 'place') {
@@ -259,11 +259,11 @@ export function apply(state: ScrabbleState, action: ScrabbleAction, lexicon: Lex
 	if (action.type === 'pass') {
 		s.last = { seat, kind: 'pass' };
 	} else {
-		if (s.bag.length < MIN_BAG_TO_EXCHANGE) throw new RuleError('Too few tiles left in the bag to exchange.');
+		if (s.bag.length < MIN_BAG_TO_EXCHANGE) throw new RuleError('bag-too-small', 'Too few tiles left in the bag to exchange.');
 		const ids = new Set(action.tileIds);
-		if (!ids.size || ids.size !== action.tileIds.length) throw new RuleError('Choose the tiles to exchange.');
+		if (!ids.size || ids.size !== action.tileIds.length) throw new RuleError('choose-exchange', 'Choose the tiles to exchange.');
 		const outgoing = s.racks[seat].filter((t) => ids.has(t.id));
-		if (outgoing.length !== ids.size) throw new RuleError("That tile isn't on your rack.");
+		if (outgoing.length !== ids.size) throw new RuleError('not-your-tile', "That tile isn't on your rack.");
 		s.racks[seat] = s.racks[seat].filter((t) => !ids.has(t.id));
 		refill(s, seat);
 		const r = shuffle([...s.bag, ...outgoing], s.rng);
@@ -275,20 +275,6 @@ export function apply(state: ScrabbleState, action: ScrabbleAction, lexicon: Lex
 	if (s.scoreless >= MAX_SCORELESS) finish(s, null);
 	else endTurn(s);
 	return s;
-}
-
-/**
- * The non-placing options for the current seat. Plays depend on the dictionary, so they come from
- * generateMoves in movegen.ts. Exchange is listed as swapping the whole rack, as the simplest form.
- */
-export function legalActions(s: ScrabbleState): ScrabbleAction[] {
-	if (s.phase === 'over') return [];
-	const seat = s.current;
-	const actions: ScrabbleAction[] = [{ type: 'pass', seat }];
-	if (s.bag.length >= MIN_BAG_TO_EXCHANGE && s.racks[seat].length) {
-		actions.push({ type: 'exchange', seat, tileIds: s.racks[seat].map((t) => t.id) });
-	}
-	return actions;
 }
 
 export type ScrabbleCan = { place: boolean; pass: boolean; exchange: boolean };

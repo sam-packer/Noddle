@@ -24,7 +24,57 @@ export function shuffle<T>(items: readonly T[], rng: number): { items: T[]; rng:
 	return { items: out, rng: state };
 }
 
+/**
+ * Why an action was refused, so screens can choose what to say next without reading the words.
+ * The engines, the rooms server and the sessions each add the reasons only they can give.
+ */
+export type RuleCode =
+	// Both games
+	| 'bad-setup'
+	| 'game-over'
+	| 'not-your-turn'
+	// Uno
+	| 'already-drew'
+	| 'draw-first'
+	| 'not-your-card'
+	| 'play-drawn-card'
+	| 'card-mismatch'
+	| 'pick-colour'
+	// Scrabble
+	| 'no-tiles'
+	| 'off-board'
+	| 'square-taken'
+	| 'not-your-tile'
+	| 'tile-mismatch'
+	| 'not-in-line'
+	| 'has-gaps'
+	| 'must-cover-centre'
+	| 'not-connected'
+	| 'not-a-word'
+	| 'bag-too-small'
+	| 'choose-exchange'
+	| 'no-dictionary'
+	// Rooms
+	| 'bad-move'
+	| 'not-running'
+	| 'not-seated'
+	| 'already-joined'
+	| 'already-started'
+	| 'room-full'
+	| 'not-host'
+	| 'needs-players'
+	// The connection to the room
+	| 'offline'
+	| 'move-lost';
+
 /** Thrown when an action breaks the rules. The message is safe to show the player. */
 export class RuleError extends Error {
 	override name = 'RuleError';
+
+	constructor(
+		readonly code: RuleCode,
+		message: string
+	) {
+		super(message);
+	}
 }

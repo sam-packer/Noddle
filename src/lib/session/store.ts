@@ -1,12 +1,13 @@
+import type { RuleCode } from '../games/rng';
 import type { SessionSnapshot } from './types';
 
-/** Holds a session's latest snapshot and tells subscribers when it changes. */
-export class SnapshotStore<V> {
-	private listeners = new Set<(snapshot: SessionSnapshot<V>) => void>();
+/** A value that tells subscribers when it changes. A Svelte store. */
+export class Store<T extends object> {
+	private listeners = new Set<(value: T) => void>();
 
-	constructor(public value: SessionSnapshot<V>) {}
+	constructor(public value: T) {}
 
-	subscribe = (run: (snapshot: SessionSnapshot<V>) => void) => {
+	subscribe = (run: (value: T) => void) => {
 		this.listeners.add(run);
 		run(this.value);
 		return () => {
@@ -14,12 +15,15 @@ export class SnapshotStore<V> {
 		};
 	};
 
-	set(change: Partial<SessionSnapshot<V>>) {
+	set(change: Partial<T>) {
 		this.value = { ...this.value, ...change };
 		for (const run of this.listeners) run(this.value);
 	}
+}
 
-	reject(reason: string) {
-		this.set({ rejected: { reason, n: (this.value.rejected?.n ?? 0) + 1 } });
+/** Holds a session's latest snapshot. */
+export class SnapshotStore<V> extends Store<SessionSnapshot<V>> {
+	reject({ code, message }: { code: RuleCode; message: string }) {
+		this.set({ rejected: { code, reason: message, n: (this.value.rejected?.n ?? 0) + 1 } });
 	}
 }

@@ -1,3 +1,5 @@
+import type { RuleCode } from '../games/rng';
+
 /** A game is over, or the script has finished. With advanceMs, the app moves on by itself. */
 export type Ended = { title: string; text: string; advanceMs?: number; won?: boolean };
 
@@ -12,7 +14,7 @@ export type SessionSnapshot<V> = {
 	note: string;
 	status: SessionStatus;
 	/** The last action refused, numbered so the same reason twice is still noticed. */
-	rejected: { reason: string; n: number } | null;
+	rejected: { code: RuleCode; reason: string; n: number } | null;
 	ended: Ended | null;
 	/** Whether the player may walk away from this game. */
 	canLeave: boolean;

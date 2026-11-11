@@ -70,7 +70,7 @@ export const demoFinished = (d: DemoUno) => d.state.hands[0].length === 1;
 export function demoApply(d: DemoUno, action: DemoAction): DemoUno {
 	const legal = demoLegal(d);
 	if (action.type === 'draw') {
-		if (!legal.draw) throw new RuleError("It isn't your turn");
+		if (!legal.draw) throw new RuleError('not-your-turn', "It isn't your turn");
 		const queued = d.drawQueue[0] ?? { color: 'red' as Color, value: '1' as Value };
 		const rigged: UnoState = {
 			...d.state,
@@ -80,7 +80,7 @@ export function demoApply(d: DemoUno, action: DemoAction): DemoUno {
 		if (state.phase === 'drawn') state = apply(state, { type: 'pass', seat: 0 });
 		return { ...d, state, drawQueue: d.drawQueue.slice(1), nextId: d.nextId + 1 };
 	}
-	if (!legal.cards.includes(action.cardId)) throw new RuleError("That card can't be played right now");
+	if (!legal.cards.includes(action.cardId)) throw new RuleError('card-mismatch', "That card can't be played right now");
 	return { ...d, state: apply(d.state, { type: 'play', seat: 0, cardId: action.cardId, color: action.color }) };
 }
 

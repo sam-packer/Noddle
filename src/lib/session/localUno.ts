@@ -1,5 +1,5 @@
 import { chooseAction } from '../games/uno/bot';
-import { apply, newGame, viewFor, type Card, type UnoAction, type UnoState, type UnoView } from '../games/uno/engine';
+import { apply, newGame, sortHand, viewFor, type UnoAction, type UnoState, type UnoView } from '../games/uno/engine';
 import { RuleError } from '../games/rng';
 import { unoEnded, unoNote } from './notes';
 import { SnapshotStore } from './store';
@@ -16,15 +16,6 @@ import {
 const NAMES = ['You', 'Ana', 'Ben', 'Cy'];
 const ME = 0;
 const NO_MOVES = { cards: [], draw: false, keep: false };
-
-const COLOR_ORDER: Card['color'][] = ['red', 'blue', 'green', 'yellow', 'wild'];
-
-/** Groups a hand by colour, so a long one is easy to page through. */
-export function sortHand(hand: Card[]) {
-	return [...hand].sort(
-		(a, b) => COLOR_ORDER.indexOf(a.color) - COLOR_ORDER.indexOf(b.color) || a.value.localeCompare(b.value) || a.id - b.id
-	);
-}
 
 /** A real game of Uno against three bots, on this device. */
 export class LocalUnoSession implements GameSession<UnoView, UnoAction> {
@@ -74,7 +65,7 @@ export class LocalUnoSession implements GameSession<UnoView, UnoAction> {
 			this.state = apply(this.state, { ...action, seat: ME } as UnoAction);
 		} catch (e) {
 			if (!(e instanceof RuleError)) throw e;
-			this.store.reject(e.message);
+			this.store.reject(e);
 			return;
 		}
 		if (this.state.current === ME && this.state.phase !== 'over' && this.state.phase !== 'play') {
