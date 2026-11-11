@@ -57,9 +57,12 @@
 		return () => clearTimeout(timer);
 	});
 
-	// The shake sends the tile home. A nod on Let's play is what moves on.
+	// The shake sends the tile home. A nod on Let's play is what moves on. Only once the cards are
+	// done, so a shake during the nod cards can't skip ahead to the undo lesson.
 	$effect(() =>
-		practice === 'wrong' && !leaving ? targets.claimCancel(() => (practice = 'home')) : undefined
+		finished && practice === 'wrong' && !leaving
+			? targets.claimCancel(() => (practice = 'home'))
+			: undefined
 	);
 
 	$effect(() => {
