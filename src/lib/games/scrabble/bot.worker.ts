@@ -11,7 +11,12 @@ function loadTrie() {
 			if (!r.ok) throw new Error(`dictionary: ${r.status}`);
 			return r.text();
 		})
-		.then(buildTrie);
+		.then(buildTrie)
+		.catch((e) => {
+			// Try again on the next turn, rather than passing for the rest of the game.
+			trie = null;
+			throw e;
+		});
 	return trie;
 }
 

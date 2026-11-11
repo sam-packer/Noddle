@@ -51,11 +51,20 @@ export function deckOf(): Card[] {
 	return cards.map((c, i) => ({ ...c, id: i + 1 }));
 }
 
+const COLOR_ORDER: Card['color'][] = [...COLORS, 'wild'];
+
+/** Groups a hand by colour, so a long one is easy to page through. */
+export function sortHand(hand: Card[]) {
+	return [...hand].sort(
+		(a, b) => COLOR_ORDER.indexOf(a.color) - COLOR_ORDER.indexOf(b.color) || a.value.localeCompare(b.value) || a.id - b.id
+	);
+}
+
 const isNumber = (c: Card) => /^\d$/.test(c.value);
 export const isWild = (c: Card) => c.color === 'wild';
 
 export function newGame({ players, seed }: { players: number; seed: number }): UnoState {
-	if (!Number.isInteger(players) || players < 2 || players > 4) throw new RuleError('Uno needs 2 to 4 players');
+	if (!Number.isInteger(players) || players < 2 || players > 4) throw new RuleError('bad-setup', 'Uno needs 2 to 4 players');
 	const shuffled = shuffle(deckOf(), seed >>> 0);
 	const deck = shuffled.items;
 	const hands = Array.from({ length: players }, () => deck.splice(-HAND_SIZE));
@@ -128,13 +137,13 @@ function drawInto(s: UnoState, seat: number, n: number) {
 
 /** Returns the next state. The given state is never changed. Breaking the rules throws RuleError. */
 export function apply(state: UnoState, action: UnoAction): UnoState {
-	if (state.phase === 'over') throw new RuleError('The game is over');
-	if (action.seat !== state.current) throw new RuleError("It isn't your turn");
+	if (state.phase === 'over') throw new RuleError('game-over', 'The game is over');
+	if (action.seat !== state.current) throw new RuleError('not-your-turn', "It isn't your turn");
 	const s = structuredClone(state);
 	const seat = action.seat;
 
 	if (action.type === 'draw') {
-		if (s.phase !== 'play') throw new RuleError('You already drew a card');
+		if (s.phase !== 'play') throw new RuleError('already-drew', 'You already drew a card');
 		const [card] = drawInto(s, seat, 1);
 		s.last = { seat, kind: 'draw', count: card ? 1 : 0 };
 		if (card && canPlay(s, card)) {
@@ -147,7 +156,7 @@ export function apply(state: UnoState, action: UnoAction): UnoState {
 	}
 
 	if (action.type === 'pass') {
-		if (s.phase !== 'drawn') throw new RuleError('You can only pass after drawing a card');
+		if (s.phase !== 'drawn') throw new RuleError('draw-first', 'You can only pass after drawing a card');
 		s.phase = 'play';
 		s.drawnId = null;
 		s.last = { seat, kind: 'pass' };
@@ -156,11 +165,11 @@ export function apply(state: UnoState, action: UnoAction): UnoState {
 	}
 
 	const index = s.hands[seat].findIndex((c) => c.id === action.cardId);
-	if (index < 0) throw new RuleError("You don't have that card");
+	if (index < 0) throw new RuleError('not-your-card', "You don't have that card");
 	const card = s.hands[seat][index];
-	if (s.phase === 'drawn' && card.id !== s.drawnId) throw new RuleError('You can only play the card you drew');
-	if (!canPlay(s, card)) throw new RuleError("That card doesn't match");
-	if (isWild(card) && !COLORS.includes(action.color as Color)) throw new RuleError('Pick a colour for the wild');
+	if (s.phase === 'drawn' && card.id !== s.drawnId) throw new RuleError('play-drawn-card', 'You can only play the card you drew');
+	if (!canPlay(s, card)) throw new RuleError('card-mismatch', "That card doesn't match");
+	if (isWild(card) && !COLORS.includes(action.color as Color)) throw new RuleError('pick-colour', 'Pick a colour for the wild');
 
 	s.hands[seat].splice(index, 1);
 	const played: PlayedCard = { ...card, by: seat };

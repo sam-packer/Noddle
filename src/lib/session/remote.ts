@@ -1,31 +1,31 @@
-import type { ScrabbleAction, ScrabbleView } from '../games/scrabble/engine';
-import type { UnoAction, UnoView } from '../games/uno/engine';
-import { sortHand } from './localUno';
+import { RuleError } from '../games/rng';
+import type { ScrabbleAction } from '../games/scrabble/engine';
+import { sortHand, type UnoAction } from '../games/uno/engine';
+import {
+	readServerMessage,
+	type ClientMessage,
+	type GameKind,
+	type RoomPhase,
+	type RoomView,
+	type SeatPresence,
+	type ServerMessage,
+	type Views,
+	type WireAction
+} from '../rooms/protocol';
 import { scrabbleEnded, scrabbleNote, unoEnded, unoNote } from './notes';
-import { SnapshotStore } from './store';
-import { realWait, type Ended, type GameSession, type Seatless, type SessionStatus, type Wait } from './types';
+import { SnapshotStore, Store } from './store';
+import { realWait, type Ended, type GameSession, type SessionSnapshot, type SessionStatus } from './types';
 
-export type RemoteView = UnoView | ScrabbleView;
-export type RemoteAction = UnoAction | ScrabbleAction;
-export type GameKind = 'uno' | 'scrabble';
-export type RoomSeat = { name: string; bot: boolean; connected: boolean };
+export type { GameKind } from '../rooms/protocol';
 
-export type RoomSocket = {
-	readyState: number;
-	send(data: string): void;
-	close(): void;
-	onopen: (() => void) | null;
-	onmessage: ((e: { data: string }) => void) | null;
-	onclose: ((e: { code: number }) => void) | null;
-	onerror: (() => void) | null;
-};
+type Actions = { uno: UnoAction; scrabble: ScrabbleAction };
 
 export type LobbyState = {
 	code: string;
 	status: SessionStatus;
-	phase: 'connecting' | 'lobby' | 'playing' | 'over';
+	phase: 'connecting' | RoomPhase;
 	game: GameKind | null;
-	seats: RoomSeat[];
+	seats: SeatPresence[];
 	you: number;
 	isHost: boolean;
 	hasView: boolean;
@@ -33,12 +33,12 @@ export type LobbyState = {
 	error: string | null;
 };
 
-const OPEN = 1;
 const FIRST_RETRY_MS = 500;
 const MAX_RETRY_MS = 10000;
 /** A socket can look open long after the network has gone, so a move must be answered by this. */
 const ANSWER_MS = 5000;
-const LOST_MOVE = 'The connection dropped, so that move was lost. Try it again.';
+const MOVE_LOST = new RuleError('move-lost', 'The connection dropped, so that move was lost. Try it again.');
+const OFFLINE = new RuleError('offline', 'Not connected. Trying to get back in.');
 /** The room has refused, closed or moved this seat, so reconnecting can't help. */
 const FINAL_CLOSE_CODES = new Map<number, string>([
 	[4001, 'This seat was opened somewhere else.'],
@@ -46,21 +46,6 @@ const FINAL_CLOSE_CODES = new Map<number, string>([
 	[4404, 'That room does not exist.'],
 	[4408, 'That room has closed.']
 ]);
-
-/** A value that tells subscribers when it changes. A Svelte store. */
-class Value<T> {
-	private listeners = new Set<(value: T) => void>();
-	constructor(public value: T) {}
-	subscribe = (run: (value: T) => void) => {
-		this.listeners.add(run);
-		run(this.value);
-		return () => void this.listeners.delete(run);
-	};
-	set(change: Partial<T>) {
-		this.value = { ...this.value, ...change };
-		for (const run of this.listeners) run(this.value);
-	}
-}
 
 const tokenKey = (code: string) => `noddle.room.${code}`;
 
@@ -80,44 +65,41 @@ export async function createRoom(baseUrl: string, game: GameKind): Promise<strin
 	return ((await response.json()) as { code: string }).code;
 }
 
+/** How a seat is named on the game screen, so everyone can see who is away or being covered. */
+function seatName(seat: SeatPresence, game: RoomView['game']) {
+	if (seat.covered) return game === 'uno' ? `${seat.name} (bot)` : `${seat.name} (away)`;
+	return seat.connected ? seat.name : `${seat.name} (away)`;
+}
+
+const isView = <K extends GameKind>(view: RoomView | null, kind: K): view is Views[K] => view?.game === kind;
+
 /**
  * A seat in a room on the rooms worker. The server holds the game, so nothing here predicts: the
  * screen only changes when the server says so, and a refused move simply never appears.
  */
-export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
-	readonly lobby: Value<LobbyState>;
-	private store: SnapshotStore<RemoteView>;
-	subscribe: SnapshotStore<RemoteView>['subscribe'];
+export class RemoteSession {
+	readonly lobby: Store<LobbyState>;
+	/** The game as this seat sees it. There's no view until the server sends the first one. */
+	private store: SnapshotStore<RoomView | null>;
+	private sessions: { [K in GameKind]: GameSession<Views[K], Actions[K]> };
 
-	private socket: RoomSocket | null = null;
+	private socket: WebSocket | null = null;
 	private closed = false;
 	private attempts = 0;
 	private seq = 0;
 	/** The move still waiting for an answer from the server. */
 	private awaiting: number | null = null;
-	private view: RemoteView | null = null;
 	private code: string;
 	private name: string;
 	private baseUrl: string;
 	private storage: Pick<Storage, 'getItem' | 'setItem'>;
-	private createSocket: (url: string) => RoomSocket;
-	private wait: Wait;
 
-	constructor(options: {
-		baseUrl: string;
-		code: string;
-		name: string;
-		storage: Pick<Storage, 'getItem' | 'setItem'>;
-		createSocket?: (url: string) => RoomSocket;
-		wait?: Wait;
-	}) {
+	constructor(options: { baseUrl: string; code: string; name: string; storage: Pick<Storage, 'getItem' | 'setItem'> }) {
 		this.baseUrl = options.baseUrl;
 		this.code = options.code;
 		this.name = options.name;
 		this.storage = options.storage;
-		this.createSocket = options.createSocket ?? ((url) => new WebSocket(url) as unknown as RoomSocket);
-		this.wait = options.wait ?? realWait;
-		this.lobby = new Value<LobbyState>({
+		this.lobby = new Store<LobbyState>({
 			code: options.code,
 			status: 'connecting',
 			phase: 'connecting',
@@ -128,9 +110,8 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 			hasView: false,
 			error: null
 		});
-		this.store = new SnapshotStore<RemoteView>({
-			// Screens only subscribe once the lobby says there's a view.
-			view: null as unknown as RemoteView,
+		this.store = new SnapshotStore<RoomView | null>({
+			view: null,
 			names: [],
 			active: null,
 			note: '',
@@ -141,15 +122,36 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 			showOpponents: true,
 			canRestart: false
 		});
-		this.subscribe = this.store.subscribe;
+		this.sessions = { uno: this.sessionFor('uno'), scrabble: this.sessionFor('scrabble') };
 		this.connect();
+	}
+
+	/**
+	 * This room as a session for one game's screen, or null until the server has sent a view of that
+	 * game. The same object comes back each time, so a screen isn't handed a new session on every update.
+	 */
+	as<K extends GameKind>(kind: K): GameSession<Views[K], Actions[K]> | null {
+		return isView(this.store.value.view, kind) ? this.sessions[kind] : null;
+	}
+
+	private sessionFor<K extends GameKind>(kind: K): GameSession<Views[K], Actions[K]> {
+		return {
+			subscribe: (run) =>
+				this.store.subscribe((snapshot) => {
+					const { view } = snapshot;
+					if (isView(view, kind)) run({ ...snapshot, view } satisfies SessionSnapshot<Views[K]>);
+				}),
+			send: (action) => this.send(action as WireAction),
+			restart: () => this.start(),
+			close: () => this.close()
+		};
 	}
 
 	private connect() {
 		const url = `${this.baseUrl.replace(/^http/, 'ws').replace(/\/$/, '')}/rooms/${this.code}/ws`;
-		let socket: RoomSocket;
+		let socket: WebSocket;
 		try {
-			socket = this.createSocket(url);
+			socket = new WebSocket(url);
 		} catch {
 			this.lobby.set({ error: "Can't reach the game server.", status: 'offline' });
 			return;
@@ -158,18 +160,30 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		socket.onopen = () => {
 			this.setStatus('live');
 			const token = this.storage.getItem(tokenKey(this.code)) ?? undefined;
-			socket.send(JSON.stringify({ type: 'join', code: this.code, name: this.name, token }));
+			this.post({ type: 'join', name: this.name, token });
 		};
-		socket.onmessage = (e) => this.receive(JSON.parse(e.data));
+		socket.onmessage = (e: MessageEvent) => {
+			let message: ServerMessage | null = null;
+			try {
+				message = readServerMessage(JSON.parse(String(e.data)));
+			} catch {
+				// Not JSON, so not from the rooms worker.
+			}
+			if (message) this.receive(message);
+		};
 		socket.onclose = (e) => {
 			if (socket === this.socket) void this.lost(e.code);
 		};
 		socket.onerror = () => {};
 	}
 
+	private post(message: ClientMessage) {
+		this.socket?.send(JSON.stringify(message));
+	}
+
 	private setStatus(status: SessionStatus) {
 		this.lobby.set({ status });
-		if (this.view) this.store.set({ status });
+		if (this.store.value.view) this.store.set({ status });
 	}
 
 	private async lost(code: number) {
@@ -183,7 +197,7 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		this.setStatus('offline');
 		const gap = Math.min(FIRST_RETRY_MS * 2 ** this.attempts, MAX_RETRY_MS);
 		this.attempts++;
-		await this.wait(gap);
+		await realWait(gap);
 		if (!this.closed) this.connect();
 	}
 
@@ -191,7 +205,7 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 	private failAwaitedMove() {
 		if (this.awaiting === null) return;
 		this.awaiting = null;
-		this.store.reject(LOST_MOVE);
+		this.store.reject(MOVE_LOST);
 	}
 
 	/** Nothing came back, so this connection is dead whatever it says. Replace it. */
@@ -202,49 +216,44 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		void this.lost(1006);
 	}
 
-	private receive(message: Record<string, unknown>) {
-		if (message.type === 'state' || message.type === 'rejected') this.awaiting = null;
+	private receive(message: ServerMessage) {
+		// Only the answer to this seat's own move counts. Other players' and bots' moves don't.
+		if ((message.type === 'state' || message.type === 'rejected') && message.seq === this.awaiting) {
+			this.awaiting = null;
+		}
 		switch (message.type) {
 			case 'joined':
 				this.attempts = 0;
-				this.storage.setItem(tokenKey(this.code), message.token as string);
-				this.lobby.set({ game: message.game as GameKind, you: message.seat as number });
+				this.storage.setItem(tokenKey(this.code), message.token);
+				this.lobby.set({ game: message.game, you: message.seat });
 				break;
 			case 'presence': {
-				const you = message.you as number;
-				this.lobby.set({
-					game: message.game as GameKind,
-					phase: message.phase as LobbyState['phase'],
-					seats: message.seats as RoomSeat[],
-					you,
-					isHost: message.host === you
-				});
-				if (this.view) this.present();
+				const { game, phase, seats, you, host } = message;
+				this.lobby.set({ game, phase, seats, you, isHost: host === you });
+				if (this.store.value.view) this.present(this.store.value.view);
 				break;
 			}
 			case 'state':
-				this.view = message.view as RemoteView;
-				this.present();
+				this.present(message.view);
 				this.lobby.set({ hasView: true });
 				break;
 			case 'rejected':
-				this.store.reject(message.reason as string);
+				this.store.reject({ code: message.code, message: message.reason });
 				break;
 			case 'error':
-				this.lobby.set({ error: message.reason as string });
+				this.lobby.set({ error: message.reason });
 				break;
 		}
 	}
 
-	private present() {
-		const raw = this.view!;
+	private present(raw: RoomView) {
 		const { seats, isHost, status } = this.lobby.value;
-		const names = seats.map((s) => s.name);
+		const names = seats.map((s) => seatName(s, raw.game));
 		const over = raw.phase === 'over';
 		const me = raw.me;
 		let note: string;
 		let ended: Ended | null;
-		let view = raw;
+		let view: RoomView = raw;
 		if (raw.game === 'uno') {
 			note = unoNote(raw.last, names, me, raw.counts);
 			ended = over ? unoEnded(raw.winner, names, me) : null;
@@ -254,8 +263,8 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 			ended = over ? scrabbleEnded(raw.scores, raw.winner, names, me) : null;
 		}
 		const toMove = over ? null : raw.current;
-		const absent = toMove !== null && seats[toMove] && !seats[toMove].connected;
-		if (absent) note = `Waiting for ${names[toMove]} to come back`;
+		const waiting = toMove !== null && seats[toMove] && !seats[toMove].connected && !seats[toMove].covered;
+		if (waiting) note = `Waiting for ${seats[toMove].name} to come back`;
 		this.store.set({
 			view,
 			names,
@@ -267,30 +276,29 @@ export class RemoteSession implements GameSession<RemoteView, RemoteAction> {
 		});
 	}
 
-	send(action: Seatless<RemoteAction>) {
-		if (this.socket?.readyState !== OPEN) {
-			this.store.reject('Not connected. Trying to get back in.');
+	private send(action: WireAction) {
+		if (this.socket?.readyState !== WebSocket.OPEN) {
+			this.store.reject(OFFLINE);
 			return;
 		}
 		const seq = ++this.seq;
 		this.awaiting = seq;
-		this.socket.send(JSON.stringify({ type: 'action', action, seq }));
-		void this.wait(ANSWER_MS).then(() => {
+		this.post({ type: 'action', action, seq });
+		void realWait(ANSWER_MS).then(() => {
 			if (this.awaiting === seq && !this.closed) this.replaceSocket();
 		});
 	}
 
 	/** Starts the game from the lobby, or another one after it ends. */
 	start() {
-		if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify({ type: 'start' }));
+		if (this.socket?.readyState === WebSocket.OPEN) this.post({ type: 'start' });
 	}
 
-	restart() {
-		this.start();
-	}
-
+	/** Leaving on purpose gives the seat up at once, rather than holding it for a grace period. */
 	close() {
+		if (this.closed) return;
 		this.closed = true;
+		if (this.socket?.readyState === WebSocket.OPEN) this.post({ type: 'leave' });
 		this.socket?.close();
 	}
 }

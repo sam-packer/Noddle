@@ -121,11 +121,13 @@
 		if (!rejectedCount) return;
 		untrack(() => {
 			const rejected = snap.rejected!;
-			log.event('rejected', { reason: rejected.reason });
+			log.event('rejected', { code: rejected.code, reason: rejected.reason });
 			submitted = false;
-			const hint = /connect to the board|centre|connection|not connected/i.test(rejected.reason)
+			// Moving the word or waiting fixes these, not taking a tile back.
+			const noUndo = ['must-cover-centre', 'not-connected', 'move-lost', 'offline', 'no-dictionary'] as const;
+			const hint = noUndo.some((code) => code === rejected.code)
 				? ''
-				: rejected.reason.includes('dictionary')
+				: rejected.code === 'not-a-word'
 					? ' Shake to take a tile back.'
 					: ' Shake to take one back.';
 			message = `${rejected.reason}${hint}`;

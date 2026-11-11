@@ -63,7 +63,7 @@ export class DemoScrabbleSession implements GameSession<ScrabbleView, ScrabbleAc
 				this.state = apply(this.state, { ...action, seat: 0 }, this.lexicon!);
 			} catch (e) {
 				if (!(e instanceof RuleError)) throw e;
-				this.store.reject(e.message);
+				this.store.reject(e);
 				return;
 			}
 			const note = scrabbleNote(this.state.last, NAMES, 0);
