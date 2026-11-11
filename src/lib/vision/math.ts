@@ -1,5 +1,3 @@
-import { Matrix, solve } from 'ml-matrix';
-
 export type Point = { x: number; y: number };
 export type Lm = { x: number; y: number; z: number };
 
@@ -115,21 +113,6 @@ export function irisPx(lm: Lm[], W: number, H: number): number {
 	return (d(469, 471) + d(474, 476)) / 2;
 }
 
-/** Iris position inside the eye: along the corner axis, and across it. */
-export function irisFeatures(lm: Lm[], W: number, H: number): number[] {
-	const one = (corner1: number, corner2: number, iris: number) => {
-		const ax = lm[corner1].x * W;
-		const ay = lm[corner1].y * H;
-		const ux = lm[corner2].x * W - ax;
-		const uy = lm[corner2].y * H - ay;
-		const len2 = ux * ux + uy * uy || 1;
-		const ix = lm[iris].x * W - (ax + ux / 2);
-		const iy = lm[iris].y * H - (ay + uy / 2);
-		return [(ix * ux + iy * uy) / len2, (-ix * uy + iy * ux) / len2];
-	};
-	return [...one(33, 133, 468), ...one(362, 263, 473)];
-}
-
 export type IrisReading = {
 	/** How far the iris has turned inside the eye, in degrees: image right, and image down. */
 	x: number;
@@ -163,37 +146,4 @@ export function irisAngles(lm: Lm[], W: number, H: number, irisCm: number): Iris
 	const a = one(33, 133, 468, 159, 145);
 	const b = one(362, 263, 473, 386, 374);
 	return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, open: (a.open + b.open) / 2 };
-}
-
-/** Ridge regression from features to x and y, with a bias term in the features. */
-export class RidgeMap {
-	private wx: number[] | null = null;
-	private wy: number[] | null = null;
-	constructor(private lambda = 0.05) {}
-
-	get fitted() {
-		return this.wx !== null;
-	}
-
-	reset() {
-		this.wx = null;
-		this.wy = null;
-	}
-
-	fit(features: number[][], xs: number[], ys: number[]) {
-		const X = new Matrix(features);
-		const n = X.columns;
-		const A = X.transpose().mmul(X);
-		for (let i = 0; i < n; i++) A.set(i, i, A.get(i, i) + this.lambda);
-		const solveFor = (y: number[]) =>
-			solve(A, X.transpose().mmul(Matrix.columnVector(y))).to1DArray();
-		this.wx = solveFor(xs);
-		this.wy = solveFor(ys);
-	}
-
-	predict(f: number[]): Point | null {
-		if (!this.wx || !this.wy) return null;
-		const dot = (w: number[]) => w.reduce((s, v, i) => s + v * f[i], 0);
-		return { x: dot(this.wx), y: dot(this.wy) };
-	}
 }

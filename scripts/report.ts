@@ -112,12 +112,19 @@ for (const e of events) {
 			break;
 		}
 		case 'rejected':
-			// One movement can be turned down on several frames in a row. Report it once.
+			// The games use this name for a refused move. Older logs also used it for head bumps.
+			if (e.kind === undefined) {
+				lines.push(`${when}   move refused: ${e.reason ?? 'no reason given'}`);
+				break;
+			}
+			// Older logs report one movement on several frames in a row. Report it once.
 			if (lastRejected !== null && e.t - lastRejected < 500) {
 				lastRejected = e.t;
 				break;
 			}
 			lastRejected = e.t;
+		// falls through
+		case 'bump-turned-down':
 			counts.rejected++;
 			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° at ${Math.round(e.speed)}°/s, needed ${Math.round(e.needSpeed)}°/s${e.talking ? ' (talking)' : ''}`);
 			break;
@@ -430,7 +437,7 @@ function chartRow(from: number) {
 			if (e.e === 'confirm') return `<text x="${px + 2}" y="${H - 5}" class="pick">${esc(e.chose ?? 'nothing')}</text>`;
 			if (e.e === 'mistake') return `<line x1="${px}" x2="${px}" y1="0" y2="${H}" stroke="#e11d48" stroke-width="3"><title>Marked mistake</title></line>`;
 			if (e.e === 'stage') return `<line x1="${px}" x2="${px}" y1="0" y2="${H}" class="stage"/><text x="${px + 3}" y="13" class="pick">${esc(e.stage)}</text>`;
-			if (e.e === 'rejected') return `<circle cx="${px}" cy="12" r="4" fill="#f59e0b"><title>${esc(`turned down ${e.kind} ${e.sizeDeg.toFixed(1)}°`)}</title></circle>`;
+			if (e.e === 'bump-turned-down' || (e.e === 'rejected' && e.kind !== undefined)) return `<circle cx="${px}" cy="12" r="4" fill="#f59e0b"><title>${esc(`turned down ${e.kind} ${e.sizeDeg.toFixed(1)}°`)}</title></circle>`;
 			return '';
 		})
 		.join('');
