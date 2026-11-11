@@ -1,5 +1,3 @@
-import type { SourceId } from '../vision/engine.svelte';
-
 export type TestRow = {
 	at: string;
 	label: string;
@@ -10,10 +8,10 @@ export type TestRow = {
 	faces: number;
 	resolution: string;
 	fps: number;
-	/** Median error in cm, over the dots where that source gave a reading. */
-	errorCm: Record<SourceId, number | null>;
-	/** Worst horizontal and vertical bias, in cm. Positive means right of or below the target. */
-	biasCm: Record<SourceId, { x: number; y: number } | null>;
+	/** Median error of the head pointer in cm, over the dots where it gave a reading. */
+	errorCm: { head: number | null };
+	/** Median horizontal and vertical bias, in cm. Positive means right of or below the target. */
+	biasCm: { head: { x: number; y: number } | null };
 };
 
 const KEY = 'gaze-test-log';

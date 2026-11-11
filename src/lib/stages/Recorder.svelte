@@ -73,7 +73,7 @@
 		const frames = engine.stopRecording();
 		status = 'Saving…';
 		try {
-			await fetch('/__recording', {
+			const res = await fetch('/__recording', {
 				method: 'POST',
 				body: JSON.stringify({
 					marks,
@@ -84,6 +84,8 @@
 					frames
 				})
 			});
+			// fetch only fails outright when the network does. A missing endpoint still answers.
+			if (!res.ok) throw new Error(`${res.status}`);
 			status = 'Saved. Tell Claude it is done.';
 		} catch {
 			status = 'Could not save the recording.';

@@ -20,14 +20,11 @@ import {
 	type Point
 } from './math';
 
-export type SourceId = 'free' | 'calibrated' | 'head';
-export const SOURCES: SourceId[] = ['free', 'calibrated', 'head'];
 export type LockState = 'searching' | 'locked' | 'lost';
 
 /** Physical setup. Values can be changed live from the HUD. */
-export const setup = {
+export const setup = $state({
 	screenWidthCm: 30.4,
-	cameraAboveScreenCm: 0.8,
 	cameraHfovDeg: 65,
 	irisCm: 1.17,
 	/** Head turn from rest that reaches the edge of the screen, in degrees. */
@@ -39,8 +36,6 @@ export const setup = {
 	headRestY: 0.6,
 	/** Swaps left and right, if a setup ever needs it. */
 	headFlipX: false,
-	/** Eye tracking stays in the code but off: head tracking is the point of Noddle. */
-	eyeModels: false,
 	/** Head movement smaller than this leaves the pointer exactly where it is. */
 	headDeadbandDeg: 0.6,
 	minFaceWidth: 0.06,
@@ -51,7 +46,7 @@ export const setup = {
 	cropScale: 0.75,
 	/** Moves that area up (negative) or down (positive), as a fraction of frame height. */
 	cropOffsetY: 0
-};
+});
 
 type Track = {
 	id: number;
@@ -59,13 +54,6 @@ type Track = {
 	lastSeen: number;
 	gestures: HeadGestures;
 	inBounds: boolean;
-};
-
-type HistoryEntry = {
-	t: number;
-	free: Point | null;
-	calibrated: Point | null;
-	head: Point | null;
 };
 
 export type DataFrame = {
@@ -81,12 +69,13 @@ export type DataFrame = {
 	yaw: number;
 	pitch: number;
 	distance: number;
+	/** Eyelid gap as a share of eye width, the same as iris.open. */
 	ear: number;
 	iris: IrisReading;
 };
 
-/** How much of each signal is median filtered, in ms. Eye models get long windows, for nystagmus. */
-const SMOOTH_MS: Record<SourceId, number> = { free: 500, calibrated: 500, head: 100 };
+/** The head signal is median filtered over this long before smoothing, to drop single bad frames. */
+const HEAD_MEDIAN_MS = 100;
 /** Keep holding the selection briefly after a gesture, while the head returns to rest. */
 const HOLD_AFTER_GESTURE_MS = 400;
 /** Taking control is a clear nod, because anyone in view could trigger it by accident. */
@@ -95,6 +84,22 @@ const LOCK_NOD_DEG = 3.5;
 const PLAYER_SWITCH_RATIO = 1.25;
 /** After a handoff, the last player's nods are still finishing, and mustn't take control back. */
 const HANDOFF_QUIET_MS = 1500;
+/** How near the player's last place a face must be, in face widths, to count as the player. */
+const SEAT_FACE_WIDTHS = 1.5;
+/**
+ * After losing the player, only someone where they were can take control. If nobody has been there
+ * for this long, they've moved or gone, so whoever is in front of the screen can nod to take over.
+ */
+const LOST_GIVE_UP_MS = 5000;
+/** No camera frame for this long means the camera or face tracking has stopped. */
+const STALL_MS = 3000;
+/** How often to check that frames are still arriving. */
+const WATCHDOG_MS = 1000;
+/** Restarts are spaced out, and after this many in a row fail, it gives up. */
+const RESTART_GAP_MS = 4000;
+const MAX_RESTARTS = 3;
+/** Frames flowing this long after a restart means it worked, so the count starts again. */
+const RESTART_OK_MS = 10000;
 
 /**
  * How much a face looks like the player: the one sitting at the laptop is the biggest in the
@@ -102,6 +107,10 @@ const HANDOFF_QUIET_MS = 1500;
  */
 function playerScore(box: FaceBox) {
 	return box.w * (1 - Math.min(1, Math.abs(box.cx - 0.5) * 1.2));
+}
+
+function nearSeat(box: FaceBox, seat: FaceBox) {
+	return Math.hypot(box.cx - seat.cx, box.cy - seat.cy) < seat.w * SEAT_FACE_WIDTHS;
 }
 
 function clampToViewport(p: Point): Point {
@@ -115,46 +124,35 @@ function pxPerCm() {
 	return screen.width / setup.screenWidthCm;
 }
 
-/** Physical screen position in cm, from the screen's top-left, to viewport pixels. */
-function screenCmToClient(xCm: number, yCm: number): Point {
-	const k = pxPerCm();
-	const chromeTop = Math.max(0, window.outerHeight - window.innerHeight);
-	return { x: xCm * k - window.screenX, y: yCm * k - window.screenY - chromeTop };
+function messageOf(err: unknown) {
+	return err instanceof Error ? err.message : String(err);
 }
 
 class VisionEngine {
 	// Reactive status for the UI
 	status = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
 	loadMessage = $state('');
+	/** What went wrong with the camera or tracking mid-session, for the screen. Empty when all is well. */
+	problem = $state('');
 	errors = $state<string[]>([]);
 	resolution = $state('');
 	fps = $state(0);
 	mediapipeMs = $state(0);
-	freeMs = $state(0);
-	calibratedMs = $state(0);
 	faceCount = $state(0);
 	faces = $state<{ id: number; box: FaceBox; locked: boolean; inBounds: boolean; player: boolean }[]>([]);
 	lock = $state<LockState>('searching');
 	yaw = $state(0);
 	pitch = $state(0);
+	/** From the iris size, so for display and logs only. */
 	distanceCm = $state(0);
-	wetDistanceCm = $state(0);
 	faceWidth = $state(0);
 	inBounds = $state(false);
-	eyesOpen = $state(true);
-	ear = $state(0);
 	lastGesture = $state('');
+	/** Where the head points this frame, smoothed, even while the pointer is held through a nod. */
+	headPoint = $state<Point | null>(null);
+	/** Median distance from a confirmed target's centre to where the head pointed, over recent picks. */
+	headErrorCm = $state<number | null>(null);
 	sampleCount = $state(0);
-	wetSamples = $state(0);
-	wetSkipped = $state(0);
-	gaze = $state<Record<SourceId, Point | null>>({ free: null, calibrated: null, head: null });
-	prequentialCm = $state<Record<SourceId, number | null>>({
-		free: null,
-		calibrated: null,
-		head: null
-	});
-	/** Head points by default. 'best' lets whichever source has the lowest measured error drive. */
-	policy = $state<'head' | 'best'>('head');
 	/** Where the player is pointing. Always live, and what the screen shows. */
 	pointer = $state<Point | null>(null);
 	/** A nod may be under way, so the selection keeps what it had. The pointer keeps moving. */
@@ -166,20 +164,6 @@ class VisionEngine {
 	/** Lip gap of the player, and whether they're talking, which asks for a firmer nod. */
 	mouth = $state(0);
 	talking = $state(false);
-	forced = $state<SourceId | null>(null);
-	info = $state<Record<string, string>>({});
-
-	/** Which source currently drives the game. */
-	get active(): SourceId {
-		if (this.forced) return this.forced;
-		if (this.policy === 'best') return this.bestSource();
-		return 'head';
-	}
-
-	/** Median error of the active source, or a pessimistic default before any samples. */
-	get activeErrorCm(): number {
-		return this.prequentialCm[this.active] ?? 7;
-	}
 
 	// Callbacks
 	onGesture: ((g: Gesture) => void) | null = null;
@@ -190,13 +174,8 @@ class VisionEngine {
 
 	// Internals
 	private video: HTMLVideoElement | null = null;
+	private stream: MediaStream | null = null;
 	private landmarker: FaceLandmarker | null = null;
-	private freeWorker: Worker | null = null;
-	private calWorker: Worker | null = null;
-	private freeBusy = false;
-	private calBusy = false;
-	private freeReady = false;
-	private calReady = false;
 	private tracks: Track[] = [];
 	private nextTrackId = 1;
 	private lockedId: number | null = null;
@@ -204,6 +183,8 @@ class VisionEngine {
 	/** The only face that can take control: the person in front of the screen. */
 	private playerId: number | null = null;
 	private lockQuietUntil = 0;
+	/** While lost, when someone was last seen where the player had been. */
+	private lostSeatSeenAt = 0;
 	private lastTs = -1;
 	private fpsWindow: number[] = [];
 	private previews = new Set<HTMLCanvasElement>();
@@ -211,21 +192,20 @@ class VisionEngine {
 	private detectCanvas = document.createElement('canvas');
 	private detectCtx = this.detectCanvas.getContext('2d', { alpha: false })!;
 
-	private raw: Record<SourceId, Point | null> = { free: null, calibrated: null, head: null };
-	private filters: Record<SourceId, OneEuro2D> = {
-		free: new OneEuro2D(0.5, 0.004),
-		calibrated: new OneEuro2D(0.8, 0.004),
-		head: new OneEuro2D(1.2, 0.01)
-	};
-	private rawFreeAngles: { yaw: number; pitch: number } | null = null;
-	private lastFace: { eye: { X: number; Y: number; Z: number } } | null = null;
-	private history: HistoryEntry[] = [];
-	private recent: Record<SourceId, { t: number; p: Point }[]> = { free: [], calibrated: [], head: [] };
+	/** When a frame was last tracked, on the performance.now() clock. */
+	private lastFrameAt = 0;
+	private bootedAt = 0;
+	private restarts = 0;
+	private restartTimer: ReturnType<typeof setTimeout> | undefined;
+
+	private headRecent: { t: number; p: Point }[] = [];
+	private headFilter = new OneEuro2D(1.2, 0.01);
+	/** What the player saw: the smoothed head point, kept on screen. Not held through nods. */
+	private history: { t: number; p: Point }[] = [];
 	private holdUntil = 0;
+	private headErrors: number[] = [];
 
 	// Calibration state, in memory only
-	private freeBiasSum = { x: 0, y: 0 };
-	private freeBiasN = 0;
 	private headNeutral: { yaw: number; pitch: number } | null = null;
 	private heldYaw: number | null = null;
 	private heldPitch: number | null = null;
@@ -234,16 +214,27 @@ class VisionEngine {
 	private recording: Record<string, unknown>[] | null = null;
 	private headNeutralAfter = 0;
 	private lastLockedBox: FaceBox | null = null;
-	private errorsCm: Record<SourceId, number[]> = { free: [], calibrated: [], head: [] };
 
 	async start() {
 		if (this.status !== 'idle') return;
+		setInterval(this.watchdog, WATCHDOG_MS);
+		await this.boot();
+	}
+
+	/** Opens the camera and face tracking, replacing any that were running. */
+	private async boot() {
+		this.teardown();
 		this.status = 'loading';
 		try {
 			this.loadMessage = 'Starting camera';
 			const stream = await navigator.mediaDevices.getUserMedia({
 				audio: false,
 				video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }
+			});
+			this.stream = stream;
+			// Unplugged, or taken by the system. Stopping it ourselves doesn't fire this.
+			stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+				if (this.stream === stream) this.stopped('The camera was disconnected');
 			});
 			const video = document.createElement('video');
 			video.playsInline = true;
@@ -262,130 +253,115 @@ class VisionEngine {
 				outputFaceBlendshapes: false
 			});
 
-			if (setup.eyeModels) this.loadMessage = 'Loading gaze models';
-			const withTimeout = (p: Promise<void>, name: string) =>
-				new Promise<void>((resolve) => {
-					const timer = setTimeout(() => {
-						this.errors.push(`${name} did not load within 30 s`);
-						resolve();
-					}, 30000);
-					p.then(() => {
-						clearTimeout(timer);
-						resolve();
-					});
-				});
-			if (setup.eyeModels) {
-				await Promise.all([
-					withTimeout(this.startFreeWorker(), 'MobileOne'),
-					withTimeout(this.startCalibratedWorker(), 'WebEyeTrack')
-				]);
-			}
-
 			this.status = 'ready';
 			this.loadMessage = '';
-			video.requestVideoFrameCallback(this.tick);
+			this.lastFrameAt = this.bootedAt = performance.now();
+			video.requestVideoFrameCallback((now, meta) => this.tick(video, now, meta));
 		} catch (err) {
-			this.status = 'error';
-			this.errors.push(err instanceof Error ? err.message : String(err));
+			this.errors.push(messageOf(err));
+			// The first start failing is shown by the gate. A restart failing tries again.
+			if (this.restarts === 0) this.status = 'error';
+			else this.scheduleRestart();
 		}
 	}
 
-	private startFreeWorker() {
-		return new Promise<void>((resolve) => {
-			const w = new Worker(new URL('./free.worker.ts', import.meta.url), { type: 'module' });
-			this.freeWorker = w;
-			w.onmessage = (e) => {
-				const m = e.data;
-				if (m.type === 'ready') {
-					this.freeReady = true;
-					this.info.free = `wasm, ${m.threads} threads`;
-					resolve();
-				} else if (m.type === 'result') {
-					this.freeBusy = false;
-					this.freeMs = m.ms;
-					this.rawFreeAngles = { yaw: m.yaw, pitch: m.pitch };
-				} else if (m.type === 'error') {
-					this.freeBusy = false;
-					this.errors.push(`free: ${m.message}`);
-					resolve();
-				}
-			};
-			w.onerror = (e) => {
-				this.errors.push(`free worker: ${e.message}`);
-				resolve();
-			};
-			w.postMessage({ type: 'init' });
-		});
+	private teardown() {
+		for (const t of this.stream?.getTracks() ?? []) t.stop();
+		this.stream = null;
+		if (this.video) this.video.srcObject = null;
+		this.video = null;
+		try {
+			this.landmarker?.close();
+		} catch {
+			// A landmarker whose GPU context was lost can fail to close. It's dropped either way.
+		}
+		this.landmarker = null;
 	}
 
-	private startCalibratedWorker() {
-		return new Promise<void>((resolve) => {
-			const w = new Worker(new URL('./calibrated.worker.ts', import.meta.url), { type: 'module' });
-			this.calWorker = w;
-			w.onmessage = (e) => {
-				const m = e.data;
-				if (m.type === 'ready') {
-					this.calReady = true;
-					this.info.calibrated = `tfjs ${m.backend}`;
-					resolve();
-				} else if (m.type === 'result') {
-					this.calBusy = false;
-					this.calibratedMs = m.ms;
-					this.eyesOpen = m.open;
-					this.ear = m.ear;
-					this.wetDistanceCm = m.depth;
-					this.raw.calibrated = m.pog
-						? {
-								x: (m.pog[0] + 0.5) * window.innerWidth,
-								y: (m.pog[1] + 0.5) * window.innerHeight
-							}
-						: null;
-				} else if (m.type === 'sampled') {
-					this.wetSamples = m.count;
-					if (m.ok && m.ms !== undefined) this.info.adapt = `${Math.round(m.ms)} ms`;
-					if (!m.ok && m.ms !== undefined) this.wetSkipped += 1;
-				} else if (m.type === 'error') {
-					this.calBusy = false;
-					this.errors.push(`calibrated ${m.during}: ${m.message}`);
-					resolve();
-				}
-			};
-			w.onerror = (e) => {
-				this.errors.push(`calibrated worker: ${e.message}`);
-				resolve();
-			};
-			w.postMessage({ type: 'init' });
-		});
+	/** Frames have stopped coming. Lets go of the player, says so, and starts everything again. */
+	private stopped(reason: string) {
+		this.lastFrameAt = performance.now();
+		if (this.status === 'error') return;
+		if (this.lock === 'locked') this.loseLock(this.lastTs);
+		this.pointer = null;
+		this.headPoint = null;
+		this.nodProgress = 0;
+		this.selectionHeld = false;
+		this.fps = 0;
+		this.faces = [];
+		this.faceCount = 0;
+		this.problem = `${reason}. Starting it again…`;
+		this.scheduleRestart();
 	}
+
+	private scheduleRestart() {
+		if (this.restartTimer) return;
+		if (this.restarts >= MAX_RESTARTS) {
+			this.teardown();
+			this.status = 'error';
+			this.problem = 'Face tracking stopped. Reload the page to start it again.';
+			return;
+		}
+		this.restarts += 1;
+		this.restartTimer = setTimeout(
+			() => {
+				this.restartTimer = undefined;
+				this.boot();
+			},
+			this.restarts === 1 ? 300 : RESTART_GAP_MS
+		);
+	}
+
+	/** Notices a camera that has gone quiet: muted, asleep, or a stalled tracker. */
+	private watchdog = () => {
+		const now = performance.now();
+		// Hidden pages get no frames, which is fine. The wait starts again once it's back.
+		if (document.hidden || this.status !== 'ready') {
+			this.lastFrameAt = now;
+			return;
+		}
+		if (now - this.lastFrameAt > STALL_MS) this.stopped('The camera stopped');
+	};
 
 	addPreview(c: HTMLCanvasElement) {
 		this.previews.add(c);
 		return () => this.previews.delete(c);
 	}
 
-	private tick = (now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+	private tick(video: HTMLVideoElement, now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) {
+		// A restart replaced this camera, so this loop ends here.
+		if (video !== this.video || !this.landmarker) return;
 		this.frameMeta = metadata;
-		const video = this.video!;
-		video.requestVideoFrameCallback(this.tick);
 		const ts = Math.max(now, this.lastTs + 1);
 		this.lastTs = ts;
-
-		this.fpsWindow.push(now);
-		while (this.fpsWindow.length && now - this.fpsWindow[0] > 1000) this.fpsWindow.shift();
-		this.fps = this.fpsWindow.length;
 
 		const W = video.videoWidth;
 		const H = video.videoHeight;
 		const crop = this.cropRect(W, H);
-		if (this.detectCanvas.width !== crop.w || this.detectCanvas.height !== crop.h) {
-			this.detectCanvas.width = crop.w;
-			this.detectCanvas.height = crop.h;
+		let result;
+		try {
+			if (this.detectCanvas.width !== crop.w || this.detectCanvas.height !== crop.h) {
+				this.detectCanvas.width = crop.w;
+				this.detectCanvas.height = crop.h;
+			}
+			this.detectCtx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+			const t0 = performance.now();
+			result = this.landmarker.detectForVideo(this.detectCanvas, ts);
+			this.mediapipeMs = performance.now() - t0;
+		} catch (err) {
+			// Usually the GPU going away, after sleep. This tracker won't recover, so start again.
+			this.errors.push(`face tracking: ${messageOf(err)}`);
+			this.stopped('Face tracking stopped');
+			return;
 		}
-		this.detectCtx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+		video.requestVideoFrameCallback((n, m) => this.tick(video, n, m));
+		this.lastFrameAt = performance.now();
+		if (this.problem) this.problem = '';
+		if (this.restarts && this.lastFrameAt - this.bootedAt > RESTART_OK_MS) this.restarts = 0;
 
-		const t0 = performance.now();
-		const result = this.landmarker!.detectForVideo(this.detectCanvas, ts);
-		this.mediapipeMs = performance.now() - t0;
+		this.fpsWindow.push(now);
+		while (this.fpsWindow.length && now - this.fpsWindow[0] > 1000) this.fpsWindow.shift();
+		this.fps = this.fpsWindow.length;
 
 		// Back to full-frame coordinates, which everything downstream uses.
 		const lms: Lm[][] = (result.faceLandmarks ?? []).map((face) =>
@@ -420,7 +396,9 @@ class VisionEngine {
 			const turnedDown = track.gestures.rejected;
 			if (turnedDown) {
 				track.gestures.rejected = null;
-				if (isLocked) session.event('rejected', { ...turnedDown });
+				// Not 'rejected', which the games use for refused moves. The log stamps its own time.
+				const { t, ...bump } = turnedDown;
+				if (isLocked) session.event('bump-turned-down', { ...bump, at: t });
 			}
 			if (isLocked) {
 				this.yaw = yaw;
@@ -464,10 +442,8 @@ class VisionEngine {
 			}
 		}
 
-		if (this.lock === 'locked' && ts - this.lockedLastSeen > setup.lostAfterMs) {
-			this.lock = 'lost';
-			this.lockedId = null;
-		}
+		if (this.lock === 'locked' && ts - this.lockedLastSeen > setup.lostAfterMs) this.loseLock(this.lockedLastSeen);
+		if (this.lock === 'lost') this.giveUpWhenSeatEmpty(assigned.map(([track]) => track), ts);
 
 		this.faces = this.tracks.map((t) => ({
 			id: t.id,
@@ -483,22 +459,43 @@ class VisionEngine {
 			activePoint = this.updatePointer(ts);
 		} else {
 			this.pointer = null;
+			this.headPoint = null;
 			this.nodProgress = 0;
 			this.selectionHeld = false;
 		}
 		this.onFrame?.(activePoint, ts);
 		this.drawPreviews(video);
-	};
+	}
+
+	private loseLock(lastSeen: number) {
+		this.lock = 'lost';
+		this.lockedId = null;
+		this.lostSeatSeenAt = lastSeen;
+	}
+
+	/**
+	 * While someone sits where the player was, only they can take control, so a neighbour nodding
+	 * along can't. Once nobody has been there for a while, the player has moved or left, and
+	 * whoever is in front of the screen may nod to take over.
+	 */
+	private giveUpWhenSeatEmpty(seen: Track[], ts: number) {
+		const seat = this.lastLockedBox;
+		if (seat && seen.some((t) => nearSeat(t.box, seat))) this.lostSeatSeenAt = ts;
+		else if (ts - this.lostSeatSeenAt > LOST_GIVE_UP_MS) {
+			this.lock = 'searching';
+			session.event('lock-searching', { after: Math.round(ts - this.lostSeatSeenAt) });
+		}
+	}
 
 	private updatePointer(ts: number): Point | null {
-		const live = this.gaze[this.active];
+		const live = this.headPoint;
 		const gestures = this.tracks.find((t) => t.id === this.lockedId)?.gestures;
 		this.nodProgress = gestures?.nodProgress ?? 0;
 		this.selectionHeld = !!gestures?.nodInProgress || ts < this.holdUntil;
 		// A nod swings the head far enough to throw the pointer across the screen. It is a click,
 		// not aiming, so the pointer waits where it was until the head is back.
 		if (!live) this.pointer = null;
-		else if (!this.selectionHeld || !this.pointer) this.pointer = clampToViewport(live);
+		else if (!this.selectionHeld || !this.pointer) this.pointer = live;
 		return this.pointer;
 	}
 
@@ -580,11 +577,10 @@ class VisionEngine {
 			return;
 		}
 		// Mid-game, only someone where the player was can take back control, so a neighbour nodding
-		// along can't. A handoff clears this, and the next person can sit anywhere.
-		const was = this.lock === 'searching' ? null : this.lastLockedBox;
-		const eligible = seen.filter(
-			(t) => t.inBounds && (!was || Math.hypot(t.box.cx - was.cx, t.box.cy - was.cy) < was.w * 1.5)
-		);
+		// along can't. A handoff clears this, and so does nobody being there for a while, and then
+		// the next person can sit anywhere.
+		const seat = this.lock === 'searching' ? null : this.lastLockedBox;
+		const eligible = seen.filter((t) => t.inBounds && (!seat || nearSeat(t.box, seat)));
 		const best = eligible.reduce<Track | null>(
 			(top, t) => (!top || playerScore(t.box) > playerScore(top.box) ? t : top),
 			null
@@ -595,9 +591,10 @@ class VisionEngine {
 	}
 
 	private takeLock(track: Track, ts: number) {
-		// A different person taking over after a loss must not inherit calibration.
+		// A different person taking over after a loss must not inherit calibration. After a
+		// handoff there's no last place, and calibration was already reset.
 		const previous = this.lastLockedBox;
-		if (this.lock === 'lost' && previous) {
+		if (previous) {
 			const d = Math.hypot(track.box.cx - previous.cx, track.box.cy - previous.cy);
 			if (d > previous.w) this.resetCalibration();
 		}
@@ -650,8 +647,6 @@ class VisionEngine {
 	}
 
 	resetCalibration() {
-		this.freeBiasSum = { x: 0, y: 0 };
-		this.freeBiasN = 0;
 		this.headNeutral = null;
 		this.heldYaw = null;
 		this.heldPitch = null;
@@ -661,15 +656,14 @@ class VisionEngine {
 		// Each face learns its own nod size and speed, which the next person mustn't inherit.
 		for (const track of this.tracks) track.gestures = new HeadGestures();
 		this.history = [];
-		this.recent = { free: [], calibrated: [], head: [] };
+		this.headRecent = [];
 		this.holdUntil = 0;
 		this.selectionHeld = false;
 		this.nodProgress = 0;
-		this.errorsCm = { free: [], calibrated: [], head: [] };
-		this.prequentialCm = { free: null, calibrated: null, head: null };
+		this.headErrors = [];
+		this.headErrorCm = null;
 		this.sampleCount = 0;
-		for (const s of SOURCES) this.filters[s].reset();
-		this.calWorker?.postMessage({ type: 'reset' });
+		this.headFilter.reset();
 	}
 
 	private processLocked(
@@ -681,50 +675,14 @@ class VisionEngine {
 	) {
 		const video = this.video!;
 
-		// Eye position in camera space, in cm: x image right, y image down, z toward the player.
+		// Distance from the iris size, for the HUD and logs. Nothing here steers the pointer.
 		const fx = W / (2 * Math.tan(((setup.cameraHfovDeg / 2) * Math.PI) / 180));
 		const iris = irisPx(lm, W, H);
 		const Z = (fx * setup.irisCm) / Math.max(iris, 1);
-		const u = ((lm[468].x + lm[473].x) / 2) * W;
-		const v = ((lm[468].y + lm[473].y) / 2) * H;
-		const X = ((u - W / 2) * Z) / fx;
-		const Y = ((v - H / 2) * Z) / fx;
 		this.distanceCm = Z;
-		this.lastFace = { eye: { X, Y, Z } };
+		// Where the eyes turn, recorded only, to compare eye movement between people. It must
+		// never reach the pointer or the gestures, which follow the head alone.
 		const eyes = irisAngles(lm, W, H, setup.irisCm);
-
-		// Calibration-free model: square crop of the face.
-		if (this.freeReady && !this.freeBusy) {
-			const box = faceBox(lm);
-			const side = Math.max(box.w * W, box.h * H) * 1.1;
-			const sx = Math.max(0, box.cx * W - side / 2);
-			const sy = Math.max(0, box.cy * H - side / 2);
-			const sw = Math.min(side, W - sx);
-			const sh = Math.min(side, H - sy);
-			if (sw > 16 && sh > 16) {
-				this.freeBusy = true;
-				createImageBitmap(video, sx, sy, sw, sh, { resizeWidth: 448, resizeHeight: 448 }).then(
-					(bitmap) => this.freeWorker!.postMessage({ type: 'frame', bitmap, ts }, [bitmap]),
-					() => (this.freeBusy = false)
-				);
-			}
-		}
-
-		// Calibrated model: full frame, because its camera geometry assumes one.
-		if (this.calReady && !this.calBusy) {
-			this.calBusy = true;
-			const face = {
-				landmarks: lm.map((l) => ({ x: l.x, y: l.y, z: l.z })),
-				matrix: { rows: 4, columns: 4, data: Array.from(matrix.data) }
-			};
-			createImageBitmap(video).then(
-				(bitmap) =>
-					this.calWorker!.postMessage({ type: 'frame', bitmap, face, ts }, [bitmap]),
-				() => (this.calBusy = false)
-			);
-		}
-
-		this.raw.free = this.projectFree();
 
 		// Head pointer: rotation only. Iris position and size must stay out of this, because
 		// they follow the eyes and would make the pointer move when the head has not.
@@ -743,7 +701,7 @@ class VisionEngine {
 			this.headNeutral = { yaw: this.heldYaw, pitch: this.heldPitch };
 		}
 		const neutral = this.headNeutral ?? { yaw: this.heldYaw, pitch: this.heldPitch };
-		this.raw.head = {
+		const raw = {
 			x:
 				window.innerWidth / 2 -
 				(setup.headFlipX ? -1 : 1) *
@@ -752,16 +710,12 @@ class VisionEngine {
 			y: this.headY(this.heldPitch - neutral.pitch)
 		};
 
-		const next: Record<SourceId, Point | null> = { free: null, calibrated: null, head: null };
-		for (const s of SOURCES) {
-			const r = this.raw[s];
-			const queue = this.recent[s];
-			if (r && Number.isFinite(r.x) && Number.isFinite(r.y)) queue.push({ t: ts, p: r });
-			while (queue.length && ts - queue[0].t > SMOOTH_MS[s]) queue.shift();
-			const m = medianPoint(queue.map((q) => q.p));
-			next[s] = r && m ? this.filters[s].filter(m, ts) : null;
-		}
-		this.gaze = next;
+		if (Number.isFinite(raw.x) && Number.isFinite(raw.y)) this.headRecent.push({ t: ts, p: raw });
+		while (this.headRecent.length && ts - this.headRecent[0].t > HEAD_MEDIAN_MS) this.headRecent.shift();
+		const m = medianPoint(this.headRecent.map((q) => q.p));
+		// Smoothed, but not yet kept on screen, so the logs still show how far off it was.
+		const aim = m ? this.headFilter.filter(m, ts) : null;
+		this.headPoint = aim && clampToViewport(aim);
 
 		this.dataTap?.({
 			video,
@@ -775,7 +729,7 @@ class VisionEngine {
 			yaw,
 			pitch,
 			distance: Z,
-			ear: this.ear,
+			ear: eyes.open,
 			iris: eyes
 		});
 
@@ -785,8 +739,8 @@ class VisionEngine {
 			pitch,
 			this.pointer?.x,
 			this.pointer?.y,
-			this.gaze.head?.x,
-			this.gaze.head?.y,
+			aim?.x,
+			aim?.y,
 			this.selectionHeld,
 			eyes.x,
 			eyes.y,
@@ -794,12 +748,9 @@ class VisionEngine {
 			this.mouth
 		);
 
-		this.history.push({
-			t: ts,
-			free: this.raw.free,
-			calibrated: this.raw.calibrated,
-			head: this.raw.head
-		});
+		// What the player saw, so a nod is judged against where the dot was, not where an
+		// unsmoothed head pointed, which can be off the screen.
+		if (this.headPoint) this.history.push({ t: ts, p: this.headPoint });
 		while (this.history.length && ts - this.history[0].t > 2500) this.history.shift();
 
 		if (this.recording) {
@@ -817,13 +768,8 @@ class VisionEngine {
 				eyeY: round(eyes.y),
 				eyeOpen: round(eyes.open),
 				distance: round(Z),
-				ear: round(this.ear),
-				headX: round(this.gaze.head?.x),
-				headY: round(this.gaze.head?.y),
-				freeX: round(this.gaze.free?.x),
-				freeY: round(this.gaze.free?.y),
-				wetX: round(this.gaze.calibrated?.x),
-				wetY: round(this.gaze.calibrated?.y),
+				headX: round(aim?.x),
+				headY: round(aim?.y),
 				pointerX: round(this.pointer?.x),
 				pointerY: round(this.pointer?.y),
 				held: this.selectionHeld
@@ -838,118 +784,42 @@ class VisionEngine {
 			: restY + (-pitchFromRest / setup.headRangeDownDeg) * (window.innerHeight - restY);
 	}
 
-	private cameraToScreenCm(px: number, py: number): Point {
-		// Screen right is image left, because the camera faces the player.
-		return { x: setup.screenWidthCm / 2 - px, y: py - setup.cameraAboveScreenCm };
-	}
-
-	/** Gaze ray from the eyes to the screen plane, plus bias from known targets. */
-	private projectFree(): Point | null {
-		if (!this.rawFreeAngles || !this.lastFace) return null;
-		const { yaw, pitch } = this.rawFreeAngles;
-		const { X, Y, Z } = this.lastFace.eye;
-		const dx = -Math.sin(yaw) * Math.cos(pitch);
-		const dy = -Math.sin(pitch);
-		const dz = Math.max(Math.cos(yaw) * Math.cos(pitch), 0.15);
-		const t = Z / dz;
-		const cm = this.cameraToScreenCm(X + t * dx, Y + t * dy);
-		const p = screenCmToClient(cm.x, cm.y);
-		if (this.freeBiasN > 0) {
-			p.x += this.freeBiasSum.x / this.freeBiasN;
-			p.y += this.freeBiasSum.y / this.freeBiasN;
-		}
-		return p;
-	}
-
 	private window(tFrom: number, tTo: number) {
-		return this.history.filter((h) => h.t >= tFrom && h.t <= tTo);
+		return this.history.filter((h) => h.t >= tFrom && h.t <= tTo).map((h) => h.p);
 	}
 
-	/** Where the active source was pointing around a moment. Used to freeze selection through a nod. */
+	/** Where the head pointed around a moment, steadied over a short window. Used to freeze selection through a nod. */
 	pointAt(t: number): Point | null {
-		const s = this.active;
-		return medianPoint(
-			this.window(t - 350, t - 40)
-				.map((h) => h[s])
-				.filter((p): p is Point => !!p)
-		);
+		return medianPoint(this.window(t - 350, t - 40));
 	}
 
 	/** Where the pointer was at a moment, without averaging across movement. */
 	pointerAt(t: number): Point | null {
-		const before = this.history.findLast((h) => h.t <= t);
-		return before?.[this.active] ?? null;
+		return this.history.findLast((h) => h.t <= t)?.p ?? null;
 	}
 
 	/** Where the head is pointing this frame, even while the pointer on screen is held through a nod. */
 	pointerNow(): Point | null {
-		return this.history[this.history.length - 1]?.[this.active] ?? null;
+		return this.history[this.history.length - 1]?.p ?? null;
 	}
 
-	sourcePointNow(s: SourceId, msBack = 800): Point | null {
-		const now = this.lastTs;
-		return medianPoint(
-			this.window(now - msBack, now)
-				.map((h) => h[s])
-				.filter((p): p is Point => !!p)
-		);
+	/** Where the head pointed over the last moments, for the accuracy test. */
+	pointNear(msBack = 800): Point | null {
+		return medianPoint(this.window(this.lastTs - msBack, this.lastTs));
 	}
 
 	/**
-	 * A known target: the player was looking at this point around time `onset`.
-	 * Error is scored before training, so it measures unseen data.
+	 * A known target: the player was pointing at this point around time `onset`. Only measures how
+	 * far off the head was, for the HUD. Nothing is trained from it.
 	 */
 	addSample(target: Point, onset: number) {
 		if (this.lock !== 'locked') return;
-		const tFrom = onset - 650;
-		const tTo = onset - 80;
-		const win = this.window(tFrom, tTo);
-		if (win.length === 0) return;
-
-		const k = pxPerCm();
-		for (const s of SOURCES) {
-			const pred = medianPoint(win.map((h) => h[s]).filter((p): p is Point => !!p));
-			if (!pred) continue;
-			const err = Math.hypot(pred.x - target.x, pred.y - target.y) / k;
-			this.errorsCm[s].push(err);
-			if (this.errorsCm[s].length > 9) this.errorsCm[s].shift();
-			this.prequentialCm[s] = median(this.errorsCm[s]);
-		}
-
-		// Free model: running bias only.
-		const freePred = medianPoint(win.map((h) => h.free).filter((p): p is Point => !!p));
-		if (freePred) {
-			const bx = this.freeBiasN ? this.freeBiasSum.x / this.freeBiasN : 0;
-			const by = this.freeBiasN ? this.freeBiasSum.y / this.freeBiasN : 0;
-			this.freeBiasSum.x += target.x - (freePred.x - bx);
-			this.freeBiasSum.y += target.y - (freePred.y - by);
-			this.freeBiasN++;
-		}
-
+		const pred = medianPoint(this.window(onset - 650, onset - 80));
+		if (!pred) return;
+		this.headErrors.push(Math.hypot(pred.x - target.x, pred.y - target.y) / pxPerCm());
+		if (this.headErrors.length > 9) this.headErrors.shift();
+		this.headErrorCm = median(this.headErrors);
 		this.sampleCount += 1;
-
-		// Calibrated model, in [-0.5, 0.5] viewport coordinates.
-		this.calWorker?.postMessage({
-			type: 'sample',
-			x: target.x / window.innerWidth - 0.5,
-			y: target.y / window.innerHeight - 0.5,
-			tFrom,
-			tTo
-		});
-	}
-
-	bestSource(): SourceId {
-		let best: SourceId = this.gaze.free ? 'free' : 'head';
-		let bestErr = Infinity;
-		if (this.sampleCount < 4) return best;
-		for (const s of SOURCES) {
-			const e = this.prequentialCm[s];
-			if (e !== null && e < bestErr && this.gaze[s]) {
-				bestErr = e;
-				best = s;
-			}
-		}
-		return best;
 	}
 
 	pxPerCm() {
@@ -992,5 +862,5 @@ export const engine = new VisionEngine();
 
 if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__engine = engine;
 
-// This module holds a camera, a render loop and workers, which a hot update would leave running.
+// This module holds a camera and a render loop, which a hot update would leave running.
 if (import.meta.hot) import.meta.hot.dispose(() => location.reload());

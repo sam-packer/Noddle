@@ -224,12 +224,16 @@ function speedAt(buf: S[], axis: Axis, i: number) {
 	return (Math.abs(buf[i][axis] - buf[j][axis]) / Math.max(buf[i].t - buf[j].t, 1)) * 1000;
 }
 
-/** The fastest the head moved between two samples, in degrees a second. */
+/**
+ * The fastest the head moved between two samples, in degrees a second. Measured over two frames to
+ * steady it, unless the stretch is shorter than that, as a very quick nod's can be.
+ */
 function fastest(buf: S[], axis: Axis, from: number, to: number) {
+	const step = to - from < 2 ? 1 : 2;
 	let top = 0;
-	for (let i = from + 2; i <= to; i++) {
-		const dt = Math.max(buf[i].t - buf[i - 2].t, 1);
-		top = Math.max(top, (Math.abs(buf[i][axis] - buf[i - 2][axis]) / dt) * 1000);
+	for (let i = from + step; i <= to; i++) {
+		const dt = Math.max(buf[i].t - buf[i - step].t, 1);
+		top = Math.max(top, (Math.abs(buf[i][axis] - buf[i - step][axis]) / dt) * 1000);
 	}
 	return top;
 }
@@ -258,6 +262,8 @@ export class HeadGestures {
 	private turnedDown: { t: number; speed: number; sizeDeg: number } | null = null;
 	/** The last bump turned down for being too small or slow, for the session log. */
 	rejected: RejectedBump | null = null;
+	/** A bump stays in view for many frames, so it's only reported once: when this was last done. */
+	private reportedAt: Record<Gesture['kind'], number> = { nod: -Infinity, shake: -Infinity };
 	/** Lip gap over the last moments, to tell when they're talking. */
 	private mouth: { t: number; open: number }[] = [];
 
@@ -334,7 +340,11 @@ export class HeadGestures {
 		const good = looks.find((b) => b.speed >= needSpeed);
 		if (good) return good;
 		if (looks.length) {
-			this.rejected = { kind, t, ...looks[0], needSpeed, talking };
+			// One that began before the last report is the same movement, still in view.
+			if (looks[0].onset > this.reportedAt[kind]) {
+				this.rejected = { kind, t, ...looks[0], needSpeed, talking };
+				this.reportedAt[kind] = t;
+			}
 			// A bob while talking wasn't a try at nodding, so it mustn't teach us they nod gently.
 			if (kind === 'nod' && !talking) this.turnedDown = { t, speed: looks[0].speed, sizeDeg: looks[0].sizeDeg };
 		}
@@ -351,9 +361,9 @@ export class HeadGestures {
 		return rest.length ? Math.abs(last.pitch - middle(rest)) : 0;
 	}
 
-	/** How far through a possible nod the head is, from 0 to 1. */
+	/** How far through a possible nod the head is, from 0 to 1, against the size that would count now. */
 	get nodProgress() {
-		return Math.min(1, this.pitchAway / gestureConfig.nodDeg);
+		return Math.min(1, this.pitchAway / this.nodSizeNeeded());
 	}
 
 	/** True while the head may be partway through a nod. */

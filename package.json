@@ -39,12 +39,10 @@
 		"@tailwindcss/forms": "^0.5.11",
 		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.3.0",
-		"@tensorflow/tfjs": "^4.22.0",
 		"@types/bun": "^1.4.4",
 		"@types/node": "^26",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",
-		"ml-matrix": "^6.15.1",
 		"svelte": "^5.57.2",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.3.0",
@@ -53,7 +51,6 @@
 		"wrangler": "^4.160.1"
 	},
 	"dependencies": {
-		"@mediapipe/tasks-vision": "^1.2.2",
-		"onnxruntime-web": "^1.31.1"
+		"@mediapipe/tasks-vision": "^1.2.2"
 	}
 }

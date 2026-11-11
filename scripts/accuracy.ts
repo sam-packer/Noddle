@@ -560,7 +560,7 @@ function printMarks(sessions: Session[], picks: Pick[]) {
 function printRejected(sessions: Session[]) {
 	heading('Nods and shakes the detector turned down, de-duplicated');
 	note(
-		`One movement can be logged on many frames, so rows under ${REJECTED_SAME_MS}ms apart count once.`,
+		`Older logs repeat one movement on many frames, so their rows under ${REJECTED_SAME_MS}ms apart count once.`,
 		'Detector settings changed between builds, so older and newest are not the same test.'
 	);
 	const rows = (part: Session[]) => {
@@ -570,8 +570,14 @@ function printRejected(sessions: Session[]) {
 		for (const s of part) {
 			const last: Record<string, number> = {};
 			for (const e of s.events) {
+				// Newer logs report each head bump once, under its own name.
+				if (e.e === 'bump-turned-down') {
+					raw++;
+					movements.push({ s, e });
+					continue;
+				}
 				if (e.e !== 'rejected') continue;
-				// The same event name is used when the game refuses a move, which isn't about the head.
+				// The games use this name for a refused move. Older logs also used it for head bumps.
 				if (e.kind === undefined) {
 					ruleRefusals++;
 					continue;

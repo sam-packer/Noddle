@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { targets } from '../input/targets.svelte';
-	import { engine, SOURCES, type SourceId } from '../vision/engine.svelte';
+	import { engine } from '../vision/engine.svelte';
 	import { median, type Point } from '../vision/math';
 	import { testLog } from './testlog.svelte';
 	import ToolLeave from './ToolLeave.svelte';
@@ -17,11 +17,7 @@
 	let index = $state(0);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	const readings: Record<SourceId, { target: Point; p: Point }[]> = {
-		free: [],
-		calibrated: [],
-		head: []
-	};
+	const readings: { target: Point; p: Point }[] = [];
 
 	function next() {
 		timer = setTimeout(() => {
@@ -37,30 +33,25 @@
 	function read() {
 		const dot = dots[index];
 		const target = { x: dot.x * innerWidth, y: dot.y * innerHeight };
-		for (const s of SOURCES) {
-			const p = engine.sourcePointNow(s, READ_MS);
-			if (p) readings[s].push({ target, p });
-		}
+		const p = engine.pointNear(READ_MS);
+		if (p) readings.push({ target, p });
 		if (train) engine.addSample(target, performance.now());
 	}
 
 	function finish() {
 		const k = engine.pxPerCm();
-		const errorCm = {} as Record<SourceId, number | null>;
-		const biasCm = {} as Record<SourceId, { x: number; y: number } | null>;
-		for (const s of SOURCES) {
-			const r = readings[s];
-			if (r.length === 0) {
-				errorCm[s] = null;
-				biasCm[s] = null;
-				continue;
-			}
-			errorCm[s] = median(r.map((o) => Math.hypot(o.p.x - o.target.x, o.p.y - o.target.y) / k));
-			biasCm[s] = {
-				x: median(r.map((o) => (o.p.x - o.target.x) / k)),
-				y: median(r.map((o) => (o.p.y - o.target.y) / k))
-			};
-		}
+		const r = readings;
+		const errorCm = {
+			head: r.length ? median(r.map((o) => Math.hypot(o.p.x - o.target.x, o.p.y - o.target.y) / k)) : null
+		};
+		const biasCm = {
+			head: r.length
+				? {
+						x: median(r.map((o) => (o.p.x - o.target.x) / k)),
+						y: median(r.map((o) => (o.p.y - o.target.y) / k))
+					}
+				: null
+		};
 		testLog.add({
 			at: new Date().toISOString(),
 			label: testLog.label,

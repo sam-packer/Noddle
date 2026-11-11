@@ -2,14 +2,9 @@
 	import { onMount } from 'svelte';
 	import { smoothPointer } from '../lib/input/smoothPointer.svelte';
 	import { targets } from '../lib/input/targets.svelte';
-	import AccuracyTest from '../lib/stages/AccuracyTest.svelte';
-	import Benchmark from '../lib/stages/Benchmark.svelte';
-	import Collector from '../lib/stages/Collector.svelte';
-	import EyeCompare from '../lib/stages/EyeCompare.svelte';
 	import Gate from '../lib/stages/Gate.svelte';
 	import Hud from '../lib/stages/Hud.svelte';
 	import Instructions from '../lib/stages/Instructions.svelte';
-	import Recorder from '../lib/stages/Recorder.svelte';
 	import Scrabble from '../lib/stages/Scrabble.svelte';
 	import Uno from '../lib/stages/Uno.svelte';
 	import { session } from '../lib/session';
@@ -21,13 +16,46 @@
 	import Menu, { type MenuChoice } from '../lib/stages/Menu.svelte';
 	import Room from '../lib/stages/Room.svelte';
 	import { toolInput } from '../lib/stages/ToolLeave.svelte';
-	import { engine, setup, SOURCES } from '../lib/vision/engine.svelte';
+	import { engine, setup } from '../lib/vision/engine.svelte';
 	import { gestureConfig } from '../lib/vision/gestures';
 
 	type Stage = 'gate' | 'instructions' | 'menu' | 'uno' | 'scrabble' | 'play-uno' | 'play-scrabble' | 'room';
+	/** A research tool. Only one is open at a time, since each takes over the targets and the gestures. */
+	type Tool = 'test' | 'train' | 'recorder' | 'collector' | 'eyes' | 'benchmark';
 
-	/** Leave the game, open tools or change the controls, so they only work with the debug panel open. */
-	const DEBUG_KEYS = 'prnbgktyxvh1230`';
+	/**
+	 * Keys that work without the debug panel: a stand-in for the head, fullscreen, and the panel
+	 * itself. Every other key leaves the game or changes the controls, so it needs the panel open.
+	 */
+	const OPEN_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'f', 'd']);
+	const TOOL_KEYS: Record<string, Tool> = {
+		g: 'recorder',
+		e: 'eyes',
+		b: 'benchmark',
+		k: 'collector',
+		t: 'test',
+		y: 'train'
+	};
+
+	/**
+	 * The research tools save to the dev server, so they only exist there, and the live site never
+	 * downloads them.
+	 */
+	const devTools = import.meta.env.DEV
+		? Promise.all([
+				import('../lib/stages/AccuracyTest.svelte'),
+				import('../lib/stages/Benchmark.svelte'),
+				import('../lib/stages/Collector.svelte'),
+				import('../lib/stages/EyeCompare.svelte'),
+				import('../lib/stages/Recorder.svelte')
+			]).then(([a, b, c, e, r]) => ({
+				AccuracyTest: a.default,
+				Benchmark: b.default,
+				Collector: c.default,
+				EyeCompare: e.default,
+				Recorder: r.default
+			}))
+		: null;
 
 	/** Asks to join a room, from a shared link. */
 	const roomLink = new URLSearchParams(location.search).get('room')?.toUpperCase() ?? null;
@@ -42,24 +70,12 @@
 	let localUno = $state<GameSession<UnoView, UnoAction> | null>(null);
 	let localScrabble = $state<GameSession<ScrabbleView, ScrabbleAction> | null>(null);
 	// A fresh script each time its stage opens, and stopped when it closes.
-	const demoUno = $derived(stage === 'uno' ? createDemoUno() : null);
-	const demoScrabble = $derived(stage === 'scrabble' ? createDemoScrabble() : null);
-	$effect(() => {
-		const opened = demoUno;
-		return () => opened?.close();
-	});
-	$effect(() => {
-		const opened = demoScrabble;
-		return () => opened?.close();
-	});
+	let demoUno = $state<GameSession<UnoView, UnoAction> | null>(null);
+	let demoScrabble = $state<GameSession<ScrabbleView, ScrabbleAction> | null>(null);
 	let hud = $state(false);
-	let test = $state<{ train: boolean } | null>(null);
-	let recording = $state(false);
-	let collecting = $state(false);
-	let eyes = $state(false);
+	let tool = $state<Tool | null>(null);
 	/** The moving pointer would pull the eyes off the dot being measured. */
 	let eyesMeasuring = $state(false);
-	let testRun = $state(false);
 	/** Shows briefly that a mistake was marked in the session log. */
 	let marked = $state(false);
 	let markTimer: ReturnType<typeof setTimeout> | undefined;
@@ -99,6 +115,8 @@
 			taught = true;
 			open(afterInstructions);
 		} else if (stage === 'uno') {
+			closeLocalGames();
+			demoScrabble = createDemoScrabble();
 			stage = 'scrabble';
 		}
 	}
@@ -106,8 +124,12 @@
 	function closeLocalGames() {
 		localUno?.close();
 		localScrabble?.close();
+		demoUno?.close();
+		demoScrabble?.close();
 		localUno = null;
 		localScrabble = null;
+		demoUno = null;
+		demoScrabble = null;
 	}
 
 	function toMenu() {
@@ -130,6 +152,7 @@
 		closeLocalGames();
 		switch (choice) {
 			case 'demo':
+				demoUno = createDemoUno();
 				stage = 'uno';
 				break;
 			case 'uno':
@@ -169,10 +192,19 @@
 		session.event('stage', { stage });
 	});
 
-	function startRecording() {
-		engine.lockFirst();
+	function openTool(next: Tool) {
+		if (!import.meta.env.DEV) return;
+		// The accuracy test waits for the player to take control. The others start straight away.
+		if (next !== 'test' && next !== 'train') engine.lockFirst();
 		hud = false;
-		recording = true;
+		tool = next;
+	}
+
+	/** Only closes the tool that asked, in case another has opened since. */
+	function closeTool(which: Tool) {
+		if (tool !== which) return;
+		tool = null;
+		eyesMeasuring = false;
 	}
 
 	function handoff() {
@@ -194,7 +226,7 @@
 				if (away && !document.hidden && g.kind === confirmWith) setAway(false);
 				return;
 			}
-			if (test || collecting || recording || eyes) {
+			if (tool && tool !== 'benchmark') {
 				if (g.kind === confirmWith) toolInput.nod?.(g.onset);
 				else toolInput.shake?.();
 				return;
@@ -212,9 +244,17 @@
 	});
 
 	function onKeydown(e: KeyboardEvent) {
-		const el = e.target as HTMLElement;
-		if (el.tagName === 'INPUT' || collecting) return;
-		if (!hud && DEBUG_KEYS.includes(e.key)) return;
+		// Browser and system shortcuts, like find or reload, stay theirs.
+		if (e.metaKey || e.ctrlKey || e.altKey) return;
+		const typing = e.target instanceof Element && !!e.target.closest('input, textarea, select');
+		// The collector has keys of its own.
+		if (typing || tool === 'collector') return;
+		if (!hud && !OPEN_KEYS.has(e.key)) return;
+		if (import.meta.env.DEV && Object.hasOwn(TOOL_KEYS, e.key)) {
+			openTool(TOOL_KEYS[e.key]);
+			e.preventDefault();
+			return;
+		}
 		switch (e.key) {
 			case 'ArrowLeft':
 				targets.move(-1, 0);
@@ -232,29 +272,11 @@
 				if (stage === 'gate') engine.lockFirst();
 				else targets.confirmKey();
 				break;
-			case 'g':
-				startRecording();
-				break;
-			case 'e':
-				engine.lockFirst();
-				hud = false;
-				eyes = true;
-				break;
-			case 'b':
-				engine.lockFirst();
-				hud = false;
-				testRun = true;
-				break;
 			case 'm':
 				markMistake();
 				break;
 			case 'c':
 				engine.recenter();
-				break;
-			case 'k':
-				engine.lockFirst();
-				hud = false;
-				collecting = true;
 				break;
 			case 'x':
 				setup.headFlipX = !setup.headFlipX;
@@ -267,14 +289,6 @@
 				break;
 			case 'd':
 				hud = !hud;
-				break;
-			case 't':
-				hud = false;
-				test = { train: false };
-				break;
-			case 'y':
-				hud = false;
-				test = { train: true };
 				break;
 			case 'n':
 				next();
@@ -294,19 +308,6 @@
 				if (document.fullscreenElement) document.exitFullscreen();
 				else document.documentElement.requestFullscreen();
 				break;
-			case '1':
-			case '2':
-			case '3':
-				engine.forced = SOURCES[Number(e.key) - 1];
-				break;
-			case '`':
-				engine.forced = null;
-				engine.policy = 'best';
-				break;
-			case '0':
-				engine.forced = null;
-				engine.policy = 'head';
-				break;
 			default:
 				return;
 		}
@@ -325,8 +326,10 @@
 	class="h-screen w-screen overflow-hidden bg-slate-950 text-white"
 	style:--press={engine.nodProgress}
 >
-	{#if testRun}
-		<Benchmark onClose={() => (testRun = false)} />
+	{#if devTools && tool === 'benchmark'}
+		{#await devTools then t}
+			<t.Benchmark onClose={() => closeTool('benchmark')} />
+		{/await}
 	{:else if stage === 'gate'}
 		<Gate />
 	{:else if stage === 'instructions'}
@@ -345,9 +348,13 @@
 		<Room request={roomRequest} onExit={toMenu} />
 	{/if}
 
-	{#if engine.lock === 'lost' && stage !== 'gate'}
+	{#if engine.problem}
 		<div class="banner">
-			Lost you. Face the screen and nod to take control.
+			{engine.problem}
+		</div>
+	{:else if engine.lock !== 'locked' && stage !== 'gate'}
+		<div class="banner">
+			{engine.lock === 'lost' ? 'Lost you. Face the screen and nod to take control.' : 'Nod to take control'}
 		</div>
 	{:else if engine.lock === 'locked' && !engine.inBounds}
 		<div class="banner">
@@ -374,29 +381,29 @@
 {/if}
 
 {#if hud}
-	<Hud onTest={(train) => (test = { train })} onRecord={startRecording} onClose={() => (hud = false)} />
-{/if}
-
-{#if collecting}
-	<Collector onClose={() => (collecting = false)} />
-{/if}
-
-{#if eyes}
-	<EyeCompare
-		bind:measuring={eyesMeasuring}
-		onClose={() => {
-			eyes = false;
-			eyesMeasuring = false;
-		}}
+	<Hud
+		onTest={(train) => openTool(train ? 'train' : 'test')}
+		onRecord={() => openTool('recorder')}
+		onClose={() => (hud = false)}
 	/>
 {/if}
 
-{#if recording}
-	<Recorder onClose={() => (recording = false)} />
-{/if}
-
-{#if test}
-	<AccuracyTest train={test.train} onClose={() => (test = null)} />
+{#if devTools && tool && tool !== 'benchmark'}
+	{#await devTools then t}
+		<!-- Keyed, so switching tools always closes the old one before the next one starts. -->
+		{#key tool}
+			{#if tool === 'collector'}
+				<t.Collector onClose={() => closeTool('collector')} />
+			{:else if tool === 'eyes'}
+				<t.EyeCompare bind:measuring={eyesMeasuring} onClose={() => closeTool('eyes')} />
+			{:else if tool === 'recorder'}
+				<t.Recorder onClose={() => closeTool('recorder')} />
+			{:else if tool === 'test' || tool === 'train'}
+				{@const which = tool}
+				<t.AccuracyTest train={which === 'train'} onClose={() => closeTool(which)} />
+			{/if}
+		{/key}
+	{/await}
 {/if}
 
 <style>

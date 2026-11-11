@@ -1,4 +1,4 @@
-import { OneEuro } from './math';
+import { OneEuro } from '../src/lib/vision/math';
 
 /**
  * An experiment, not used by the game. In real play it made aiming worse, even though `bun run pointer`

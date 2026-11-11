@@ -71,8 +71,12 @@
 	const canvas = document.createElement('canvas');
 	const ctx = canvas.getContext('2d', { alpha: false })!;
 
+	/** Resolves true once the dev server has it. Never rejects, so a lost write can't stop a run. */
 	const post = (path: string, body: BodyInit, extra = '') =>
-		fetch(`/__dataset/${path}?session=${session}${extra}`, { method: 'POST', body });
+		fetch(`/__dataset/${path}?session=${session}${extra}`, { method: 'POST', body }).then(
+			(res) => res.ok,
+			() => false
+		);
 
 	function nextDot() {
 		if (bag.length === 0) {
@@ -157,8 +161,8 @@
 					return;
 				}
 				post('frame', blob, `&n=${id}`)
-					.then(() => {
-						saved += 1;
+					.then((ok) => {
+						if (ok) saved += 1;
 					})
 					.finally(() => {
 						uploads -= 1;
