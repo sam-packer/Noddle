@@ -88,7 +88,7 @@
 		<span class:warn={!engine.inBounds}>{engine.inBounds ? 'In bounds' : 'OUT OF BOUNDS'}</span>
 		<span>Landmarks {fmt(engine.mediapipeMs, 0)} ms</span><span>Samples {engine.sampleCount}/{engine.wetSamples}</span>
 		<span>Free {fmt(engine.freeMs, 0)} ms</span><span>WET {fmt(engine.calibratedMs, 0)} ms</span>
-		<span>Last: {engine.lastGesture || "–"} · nods {engine.nodStyle ?? "–"}</span><span>{engine.info.calibrated ?? ''}</span>
+		<span>Last: {engine.lastGesture || "–"} · nods {engine.nodStyle ?? "–"} · mouth {engine.mouth.toFixed(2)}{engine.talking ? " TALKING" : ""}</span><span>{engine.info.calibrated ?? ''}</span>
 	</div>
 
 	<table class="mt-1 w-full">

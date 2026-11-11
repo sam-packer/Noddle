@@ -15,7 +15,7 @@ export type Gesture = {
 export type NodStyle = 'subtle' | 'steady' | 'big';
 
 /** A bump that had the right shape but was small or slow for this person. */
-export type RejectedBump = Gesture & { needSpeed: number };
+export type RejectedBump = Gesture & { needSpeed: number; talking: boolean };
 
 /**
  * A nod and a shake are the same movement on different axes: the head goes out and comes back.
@@ -69,7 +69,17 @@ export const gestureConfig = {
 	/** How far back up a sharp dip must bounce, as a share of the dip. */
 	sharpDipBounce: 0.25,
 	/** A shake can swing back and forth for a while, and one shake must only count once. */
-	shakeRefractoryMs: 1200
+	shakeRefractoryMs: 1200,
+	/**
+	 * Talking bobs the head. In played games those bobs were 2.5° to 5° at 17 to 36°/s, the same as
+	 * a gentle nod, so while the mouth is moving a nod has to be firmer than any of them.
+	 */
+	talkNodDeg: 3.5,
+	talkNodSpeed: 40,
+	/** The lips opening and closing by this share of the eye width means they're talking. */
+	talkMouthRange: 0.05,
+	/** Talking is judged over this long, so the pauses between words still count as talking. */
+	talkWindowMs: 1500
 };
 
 /** How far back to look for where the head was before a bump began, in ms. */
@@ -248,20 +258,36 @@ export class HeadGestures {
 	private turnedDown: { t: number; speed: number; sizeDeg: number } | null = null;
 	/** The last bump turned down for being too small or slow, for the session log. */
 	rejected: RejectedBump | null = null;
+	/** Lip gap over the last moments, to tell when they're talking. */
+	private mouth: { t: number; open: number }[] = [];
+
+	/** True while their mouth is moving, so their head is bobbing with speech. */
+	get talking() {
+		if (this.mouth.length < 2) return false;
+		let lo = Infinity;
+		let hi = -Infinity;
+		for (const m of this.mouth) {
+			lo = Math.min(lo, m.open);
+			hi = Math.max(hi, m.open);
+		}
+		return hi - lo >= gestureConfig.talkMouthRange;
+	}
 
 	/** The slowest gesture that counts for this person. */
-	private speedNeeded(seen: number[]) {
+	private speedNeeded(seen: number[], kind: Gesture['kind']) {
 		const cfg = gestureConfig;
-		if (seen.length < PERSONAL_MIN_SEEN) return 0;
-		return Math.min(cfg.personalSpeedMax, cfg.personalSpeedShare * middle(seen));
+		const talkFloor = kind === 'nod' && this.talking ? cfg.talkNodSpeed : 0;
+		if (seen.length < PERSONAL_MIN_SEEN) return talkFloor;
+		return Math.max(talkFloor, Math.min(cfg.personalSpeedMax, cfg.personalSpeedShare * middle(seen)));
 	}
 
 	/** The smallest nod that counts for this person. */
 	private nodSizeNeeded() {
 		const cfg = gestureConfig;
-		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return cfg.nodDeg;
+		const floor = this.talking ? Math.max(cfg.nodDeg, cfg.talkNodDeg) : cfg.nodDeg;
+		if (this.nodSizes.length < PERSONAL_MIN_SEEN) return floor;
 		const share = cfg.personalSizeShare * middle(this.nodSizes);
-		return Math.max(cfg.nodDeg, Math.min(cfg.personalSizeMax, share));
+		return Math.max(floor, Math.min(cfg.personalSizeMax, share));
 	}
 
 	/** How this person has been nodding lately, once there's enough to go on. */
@@ -298,7 +324,8 @@ export class HeadGestures {
 
 	/** Looks for this axis's gesture, checking it against what this person usually does. */
 	private check(kind: Gesture['kind'], axis: Axis, base: number, seen: number[], t: number) {
-		const needSpeed = this.speedNeeded(seen);
+		const needSpeed = this.speedNeeded(seen, kind);
+		const talking = this.talking;
 		const looks = [
 			axis === 'pitch' ? findSharpDip(this.buf) : null,
 			findBump(this.buf, axis, base, gestureConfig.maxMs),
@@ -307,8 +334,9 @@ export class HeadGestures {
 		const good = looks.find((b) => b.speed >= needSpeed);
 		if (good) return good;
 		if (looks.length) {
-			this.rejected = { kind, t, ...looks[0], needSpeed };
-			if (kind === 'nod') this.turnedDown = { t, speed: looks[0].speed, sizeDeg: looks[0].sizeDeg };
+			this.rejected = { kind, t, ...looks[0], needSpeed, talking };
+			// A bob while talking wasn't a try at nodding, so it mustn't teach us they nod gently.
+			if (kind === 'nod' && !talking) this.turnedDown = { t, speed: looks[0].speed, sizeDeg: looks[0].sizeDeg };
 		}
 		return null;
 	}
@@ -351,11 +379,13 @@ export class HeadGestures {
 		this.updateStyle();
 	}
 
-	push(t: number, yawRaw: number, pitchRaw: number): Gesture | null {
+	push(t: number, yawRaw: number, pitchRaw: number, mouthOpen?: number): Gesture | null {
 		const yaw = this.fy.filter(yawRaw, t);
 		const pitch = this.fp.filter(pitchRaw, t);
 		this.buf.push({ t, yaw, pitch });
 		while (this.buf.length && t - this.buf[0].t > HISTORY_MS) this.buf.shift();
+		if (mouthOpen !== undefined) this.mouth.push({ t, open: mouthOpen });
+		while (this.mouth.length && t - this.mouth[0].t > gestureConfig.talkWindowMs) this.mouth.shift();
 		if (t < this.blockedUntil || this.buf.length < 4) return null;
 
 		const cfg = gestureConfig;

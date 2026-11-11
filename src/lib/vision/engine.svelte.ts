@@ -8,6 +8,7 @@ import {
 	irisPx,
 	median,
 	medianPoint,
+	mouthOpen,
 	OneEuro,
 	OneEuro2D,
 	type FaceBox,
@@ -159,6 +160,9 @@ class VisionEngine {
 	nodStyle = $state<NodStyle | null>(null);
 	/** How far through a nod the player is, from 0 to 1. Lets the selected thing dip with the head. */
 	nodProgress = $state(0);
+	/** Lip gap of the player, and whether they're talking, which asks for a firmer nod. */
+	mouth = $state(0);
+	talking = $state(false);
 	forced = $state<SourceId | null>(null);
 	info = $state<Record<string, string>>({});
 
@@ -397,18 +401,19 @@ class VisionEngine {
 
 		const angles = assigned.map(([track, i]) => {
 			const { yaw, pitch } = headAngles(mats[i].data);
+			const mouth = mouthOpen(lms[i], W, H);
 			track.inBounds =
 				track.box.w >= setup.minFaceWidth &&
 				track.box.w <= setup.maxFaceWidth &&
 				Math.abs(yaw) <= setup.maxPoseDeg &&
 				Math.abs(pitch) <= setup.maxPoseDeg;
-			return { yaw, pitch };
+			return { yaw, pitch, mouth };
 		});
 		this.choosePlayer(assigned.map(([track]) => track));
 
 		for (const [n, [track, i]] of assigned.entries()) {
-			const { yaw, pitch } = angles[n];
-			const g = track.gestures.push(ts, yaw, pitch);
+			const { yaw, pitch, mouth } = angles[n];
+			const g = track.gestures.push(ts, yaw, pitch, mouth);
 			const isLocked = this.lockedId === track.id;
 			const turnedDown = track.gestures.rejected;
 			if (turnedDown) {
@@ -419,6 +424,8 @@ class VisionEngine {
 				this.yaw = yaw;
 				this.pitch = pitch;
 				this.faceWidth = track.box.w;
+				this.mouth = mouth;
+				this.talking = track.gestures.talking;
 				this.lastLockedBox = track.box;
 				this.inBounds = track.inBounds;
 				this.lockedLastSeen = ts;
@@ -439,7 +446,8 @@ class VisionEngine {
 					at: ts,
 					onset: g.onset,
 					sizeDeg: Math.round(g.sizeDeg * 10) / 10,
-					speed: Math.round(g.speed)
+					speed: Math.round(g.speed),
+					talking: track.gestures.talking
 				});
 				this.onGesture?.(g);
 			} else if (
@@ -780,7 +788,8 @@ class VisionEngine {
 			this.selectionHeld,
 			eyes.x,
 			eyes.y,
-			eyes.open
+			eyes.open,
+			this.mouth
 		);
 
 		this.history.push({

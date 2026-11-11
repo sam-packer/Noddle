@@ -99,6 +99,15 @@ export function faceBox(lm: Lm[]): FaceBox {
 	return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY };
 }
 
+/**
+ * How far apart the lips are, as a share of the width between the outer eye corners, so it doesn't
+ * change with distance from the camera. Talking makes this go up and down.
+ */
+export function mouthOpen(lm: Lm[], W: number, H: number): number {
+	const d = (a: number, b: number) => Math.hypot((lm[a].x - lm[b].x) * W, (lm[a].y - lm[b].y) * H);
+	return d(13, 14) / Math.max(d(33, 263), 1e-6);
+}
+
 /** Iris diameter in pixels, averaged over both eyes. */
 export function irisPx(lm: Lm[], W: number, H: number): number {
 	const d = (a: number, b: number) =>

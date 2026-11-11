@@ -85,7 +85,7 @@ for (const e of events) {
 		}
 		case 'gesture': {
 			const speed = e.speed === undefined ? '' : `, ${e.speed}°/s`;
-			lines.push(`${when} ${e.kind.toUpperCase()} ${e.sizeDeg}°${speed}, began ${Math.round(e.at - e.onset)}ms before firing`);
+			lines.push(`${when} ${e.kind.toUpperCase()} ${e.sizeDeg}°${speed}, began ${Math.round(e.at - e.onset)}ms before firing${e.talking ? ', while talking' : ''}`);
 			if (e.kind === 'nod') {
 				counts.nods++;
 				if (lastNod !== null && (e.at - lastNod) / 1000 < TOO_SOON_S) {
@@ -119,7 +119,7 @@ for (const e of events) {
 			}
 			lastRejected = e.t;
 			counts.rejected++;
-			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° at ${Math.round(e.speed)}°/s, needed ${Math.round(e.needSpeed)}°/s`);
+			lines.push(`${when} turned down ${e.kind}: ${e.sizeDeg.toFixed(1)}° at ${Math.round(e.speed)}°/s, needed ${Math.round(e.needSpeed)}°/s${e.talking ? ' (talking)' : ''}`);
 			break;
 		case 'mistake':
 			counts.mistakes++;
