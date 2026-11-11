@@ -108,7 +108,6 @@
 					<button
 						use:target={{ id: 'start', legal: !leaving, confirm: onDone }}
 						class="start"
-						class:focused={targets.focused === 'start'}
 					>
 						Let's play
 					</button>
@@ -131,9 +130,8 @@
 				calib: true,
 				confirm: () => (step = i + 1)
 			}}
-			class="absolute h-44 w-32 -translate-x-1/2 -translate-y-1/2 rounded-xl border-4 text-5xl font-bold transition-all"
+			class="spot absolute h-44 w-32 -translate-x-1/2 -translate-y-1/2 rounded-xl border-4 text-5xl font-bold transition-all"
 			class:glow={step === i}
-			class:focused={targets.focused === `spot-${i}`}
 			class:done={step > i}
 			class:idle={step < i}
 			class:gone={finished}
@@ -305,7 +303,8 @@
 		box-shadow: 0 0 50px 12px rgb(251 191 36 / 0.7);
 	}
 	/* Lights up only while the pointer is on it, so a nod clearly has something to land on. */
-	.focused {
+	.start:global([data-focused]),
+	.spot:global([data-focused]) {
 		background: #fde047;
 		border-color: white;
 		color: #0f172a;

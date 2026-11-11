@@ -14,6 +14,12 @@ export type TargetDef = {
 	exact?: boolean;
 	/** Costly to hit by accident, so the pointer must really go there and already be there as the nod starts. */
 	deliberate?: boolean;
+	/**
+	 * A row of like choices, such as the cards in a hand. A nod that began while the head was still
+	 * sweeping along a row goes to the one it arrived at, but only within the same group. Without a
+	 * group, a target is never chosen in place of another.
+	 */
+	group?: string;
 	confirm: (ctx: ConfirmContext) => void;
 };
 
@@ -58,8 +64,11 @@ function rectDistance(r: DOMRect, p: Point) {
 	return inside + centre * 0.05;
 }
 
-/** Tiles, cards and colours sit in a row of their kind, named like `rack-3`. */
-const kindOf = (id: string) => id.split('-')[0];
+/**
+ * Can be chosen now: legal, and not on its way out. Svelte makes an element inert while it animates
+ * out, like a played card flying to the pile, and its target lasts until the animation ends.
+ */
+const choosable = (e: Entry | undefined): e is Entry => !!e && e.def.legal && !e.el.closest('[inert]');
 
 function centreOf(el: HTMLElement): Point {
 	const r = el.getBoundingClientRect();
@@ -76,6 +85,8 @@ class Targets {
 	onCancel: (() => void) | null = null;
 
 	private entries = new Map<string, Entry>();
+	/** Marked with `data-focused`, so a stage can style it without repeating its id. */
+	private focusedEl: HTMLElement | null = null;
 	private pendingSwitch: { id: string; since: number } | null = null;
 	private lastGaze = 0;
 	private inputPriorityUntil = 0;
@@ -92,25 +103,40 @@ class Targets {
 		};
 	}
 
+	/**
+	 * The newest element with an id wins. One animating out can share its id with the one that
+	 * replaced it, and must not take that one's place or remove it when it finally goes.
+	 */
 	register(el: HTMLElement, def: TargetDef) {
 		this.entries.set(def.id, { el, def });
+		if (this.focused === def.id) this.markFocused(el);
 	}
 
 	update(el: HTMLElement, def: TargetDef) {
 		const e = this.entries.get(def.id);
-		if (e) e.def = def;
-		else this.entries.set(def.id, { el, def });
-		if (this.focused === def.id && !def.legal) this.setFocus(null);
+		if (!e) this.register(el, def);
+		else if (e.el === el) e.def = def;
+		if (this.focused === def.id && !choosable(this.entries.get(def.id))) this.setFocus(null);
 	}
 
-	unregister(id: string) {
+	unregister(id: string, el: HTMLElement) {
+		if (this.entries.get(id)?.el !== el) return;
 		this.entries.delete(id);
 		if (this.focused === id) this.setFocus(null);
+	}
+
+	private markFocused(el: HTMLElement | null) {
+		if (el === this.focusedEl) return;
+		// One animating out keeps its look until it has gone, like a played card on its way.
+		if (!this.focusedEl?.closest('[inert]')) this.focusedEl?.removeAttribute('data-focused');
+		el?.setAttribute('data-focused', '');
+		this.focusedEl = el;
 	}
 
 	private setFocus(id: string | null) {
 		if (this.focused === id) return;
 		this.focused = id;
+		this.markFocused((id && this.entries.get(id)?.el) || null);
 		const p = engine.pointer;
 		session.event('focus', { id, x: p && Math.round(p.x), y: p && Math.round(p.y) });
 		this.history.push({ t: performance.now(), id });
@@ -132,7 +158,7 @@ class Targets {
 	}
 
 	private legalEntries() {
-		return [...this.entries.values()].filter((e) => e.def.legal);
+		return [...this.entries.values()].filter(choosable);
 	}
 
 		/** How far outside a target the pointer can be and still select it, then keep it selected. */
@@ -149,7 +175,7 @@ class Targets {
 	 */
 	updateGaze(p: Point | null, t: number, held = false) {
 		if (!this.enabled || t < this.inputPriorityUntil) return;
-		if (this.focused && !this.entries.get(this.focused)?.def.legal) this.setFocus(null);
+		if (this.focused && !choosable(this.entries.get(this.focused))) this.setFocus(null);
 		this.updateFocusCentre();
 
 		// A possible nod keeps what is selected, but must not stop something being selected.
@@ -223,7 +249,7 @@ class Targets {
 			}
 		}
 		let entry = id ? this.entries.get(id) : undefined;
-		if (!entry?.def.legal) entry = this.focused ? this.entries.get(this.focused) : undefined;
+		if (!choosable(entry)) entry = this.focused ? this.entries.get(this.focused) : undefined;
 		// The highlight trails the pointer slightly. If the pointer was already on something when
 		// the nod began, that is what the player meant, whatever was still highlighted.
 		const under = this.legalAt(engine.pointerAt(onset));
@@ -233,7 +259,7 @@ class Targets {
 		if (entry?.def.deliberate && entry.def.id !== id && entry !== under) entry = undefined;
 		const point = engine.pointAt(onset);
 		session.event('confirm', {
-			chose: entry?.def.legal ? entry.def.id : null,
+			chose: choosable(entry) ? entry.def.id : null,
 			wasAtOnset: id,
 			arrived: !!arrived,
 			selectedNow: this.focused,
@@ -245,7 +271,7 @@ class Targets {
 				return [e.def.id, Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
 			})
 		});
-		if (!entry?.def.legal) {
+		if (!choosable(entry)) {
 			this.missedNods += 1;
 			return;
 		}
@@ -255,13 +281,14 @@ class Targets {
 
 	/**
 	 * The neighbour to use instead, if the head was still sweeping along a row when the nod began.
-	 * Only ever another of the same kind: a big nod can drop the pointer onto Play or Leave by the
-	 * time it fires, and board squares are close enough that the start of the nod must decide.
+	 * Only ever another in the same group: a big nod can drop the pointer onto Play or Leave by the
+	 * time it fires, a yes and its no sit side by side, and board squares are close enough that the
+	 * start of the nod must decide.
 	 */
 	private arrivedAt(entry: Entry | undefined, onset: number) {
 		const now = this.focused ? this.entries.get(this.focused) : undefined;
-		if (!entry || !now?.def.legal || now === entry || now.def.exact) return null;
-		if (kindOf(now.def.id) !== kindOf(entry.def.id)) return null;
+		if (!entry || !choosable(now) || now === entry || now.def.exact) return null;
+		if (!now.def.group || now.def.group !== entry.def.group) return null;
 		const from = engine.pointerAt(onset);
 		const to = engine.pointerNow();
 		return from && to && Math.abs(to.x - from.x) >= STILL_ARRIVING_PX ? now : null;
@@ -272,9 +299,13 @@ class Targets {
 		if (this.enabled) this.onCancel?.();
 	}
 
+	owns(id: string, el: HTMLElement) {
+		return this.entries.get(id)?.el === el;
+	}
+
 	click(id: string, point: Point) {
 		const e = this.entries.get(id);
-		if (e?.def.legal) e.def.confirm({ point, via: 'mouse' });
+		if (choosable(e)) e.def.confirm({ point, via: 'mouse' });
 	}
 
 	move(dx: number, dy: number) {
@@ -314,22 +345,28 @@ class Targets {
 			: legal.length === 1
 				? legal[0]
 				: undefined;
-		if (e?.def.legal) e.def.confirm({ point: centreOf(e.el), via: 'key' });
+		if (choosable(e)) e.def.confirm({ point: centreOf(e.el), via: 'key' });
 	}
 }
 
 export const targets = new Targets();
 
-/** Svelte action: makes an element something the player can look at and confirm. */
+/**
+ * Svelte action: makes an element something the player can look at and confirm. While it is
+ * selected it carries a `data-focused` attribute to style it by.
+ */
 export function target(el: HTMLElement, def: TargetDef) {
 	let current = def;
 	targets.register(el, def);
-	const onClick = (e: MouseEvent) => targets.click(current.id, { x: e.clientX, y: e.clientY });
+	const onClick = (e: MouseEvent) => {
+		// A click reaches the newest element with this id, so one animating out must not pass it on.
+		if (targets.owns(current.id, el)) targets.click(current.id, { x: e.clientX, y: e.clientY });
+	};
 	el.addEventListener('click', onClick);
 	return {
 		update(next: TargetDef) {
 			if (next.id !== current.id) {
-				targets.unregister(current.id);
+				targets.unregister(current.id, el);
 				targets.register(el, next);
 			} else {
 				targets.update(el, next);
@@ -337,8 +374,9 @@ export function target(el: HTMLElement, def: TargetDef) {
 			current = next;
 		},
 		destroy() {
-			targets.unregister(current.id);
+			targets.unregister(current.id, el);
 			el.removeEventListener('click', onClick);
+			el.removeAttribute('data-focused');
 		}
 	};
 }

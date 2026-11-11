@@ -15,14 +15,18 @@
 	import { engine } from '../vision/engine.svelte';
 	import Confetti from './Confetti.svelte';
 	import GameExit from './GameExit.svelte';
+	import { gameEnd } from './gameEnd.svelte';
 	import HeadCue from './HeadCue.svelte';
 
 	let {
 		session,
+		onDone,
 		onExit,
 		restartDemo
 	}: {
 		session: GameSession<ScrabbleView, ScrabbleAction>;
+		/** Where a scripted ending moves on to by itself. Without one, it leaves. */
+		onDone?: () => void;
 		onExit: () => void;
 		/** In the demo, the corner button and the end of the game start it over. */
 		restartDemo?: () => void;
@@ -31,8 +35,6 @@
 	const PREMIUM_COLOR = { TW: '#b91c1c', DW: '#be7c8c', TL: '#1d4ed8', DL: '#60a5fa' };
 	const DEFAULT_ZOOM = 5;
 	const CENTRE = 7;
-	/** A stray nod just after the game ends must not choose what happens next. */
-	const END_BUTTONS_DELAY_MS = 1500;
 	const PLAY_HOLD_MS = 1500;
 	/** The two-step picker for a blank: a group of letters, then the letter. */
 	const LETTER_GROUPS = ['ABCDE', 'FGHIJ', 'KLMNO', 'PQRST', 'UVWXYZ'];
@@ -58,7 +60,6 @@
 	let message = $state('');
 	let boardEl = $state<HTMLElement>();
 	let leaving = $state(false);
-	let endButtons = $state(false);
 	/** Just after backing out, when Play has appeared under the pointer and must not take a nod. */
 	let playHeld = $state(false);
 	/** Sent and waiting for an answer, so a second nod can't send the same play twice. */
@@ -165,28 +166,24 @@
 		});
 	});
 
-	const hasEnded = $derived(!!snap.ended);
-	$effect(() => {
-		const ended = hasEnded;
-		untrack(() => {
-			if (ended) {
-				stage = 'done';
-				clearHold();
-				pending = [];
-				return;
-			}
-			if (stage === 'done') {
-				stage = 'idle';
-				message = '';
-				recent = [];
-			}
-		});
-		if (!ended) {
-			endButtons = false;
-			return;
+	const end = gameEnd({
+		ended: () => snap.ended,
+		onDone: () => (onDone ?? onExit)(),
+		onEnd: () => {
+			stage = 'done';
+			clearHold();
+			pending = [];
+			swapping = [];
+			leaving = false;
+		},
+		onNewGame: () => {
+			stage = 'idle';
+			message = '';
+			recent = [];
+			knownSquares = null;
+			submitted = false;
+			playHeld = false;
 		}
-		const timer = setTimeout(() => (endButtons = true), END_BUTTONS_DELAY_MS);
-		return () => clearTimeout(timer);
 	});
 
 	function closeStep() {
@@ -334,6 +331,8 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
+		// Not with a modifier, which is the browser's own zoom.
+		if (e.metaKey || e.ctrlKey || e.altKey) return;
 		if (e.key === '-') zoomSize = Math.min(9, zoomSize + 1);
 		if (e.key === '=') zoomSize = Math.max(3, zoomSize - 1);
 	}
@@ -422,13 +421,13 @@
 					id: `rack-${i}`,
 					legal: available && !leaving,
 					calib: true,
+					group: 'rack',
 					confirm: () => (stage === 'swap' ? toggleSwap(tile.id) : pickTile(i))
 				}}
 				class="rack-tile"
 				class:gone={rackUsed(i) || heldIndex === i}
 				class:off={!available}
 				class:chosen={swapping.includes(tile.id)}
-				class:focused={targets.focused === `rack-${i}`}
 			>
 				{tile.letter === '?' ? '' : tile.letter}<sub>{tileValue(tile.letter)}</sub>
 			</button>
@@ -441,14 +440,12 @@
 			<button
 				use:target={{ id: 'pass-no', legal: !leaving, confirm: () => (stage = 'idle') }}
 				class="action close side-left"
-				class:focused={targets.focused === 'pass-no'}
 			>
 				✕ Keep turn
 			</button>
 			<button
 				use:target={{ id: 'pass-yes', legal: !leaving, confirm: passTurn }}
 				class="action side-right bg-slate-600"
-				class:focused={targets.focused === 'pass-yes'}
 			>
 				Yes, pass
 			</button>
@@ -456,7 +453,6 @@
 			<button
 				use:target={{ id: 'swap-no', legal: !leaving, confirm: () => (stage = 'idle') }}
 				class="action close side-left"
-				class:focused={targets.focused === 'swap-no'}
 			>
 				✕ Cancel
 			</button>
@@ -464,7 +460,6 @@
 				use:target={{ id: 'swap-yes', legal: swapping.length > 0 && !leaving, confirm: confirmSwap }}
 				class="action side-right bg-slate-600"
 				class:off={swapping.length === 0}
-				class:focused={targets.focused === 'swap-yes'}
 			>
 				Swap {swapping.length || ''}
 			</button>
@@ -474,7 +469,6 @@
 				use:target={{ id: 'pass', legal: canAct && view.can.pass, confirm: () => (stage = 'pass') }}
 				class="action side-left bg-slate-600"
 				class:off={!(canAct && view.can.pass)}
-				class:focused={targets.focused === 'pass'}
 			>
 				Pass
 			</button>
@@ -482,7 +476,6 @@
 				use:target={{ id: 'exchange', legal: canAct && view.can.exchange, confirm: startSwap }}
 				class="action side-right bg-slate-600"
 				class:off={!(canAct && view.can.exchange)}
-				class:focused={targets.focused === 'exchange'}
 			>
 				Exchange
 			</button>
@@ -547,11 +540,11 @@
 							id: `cell-${r}-${c}`,
 							legal: !letterAt(r, c) && !leaving,
 							exact: true,
+							group: 'board',
 							confirm: () => placeAt(r, c)
 						}}
 						class="spot"
 						class:blocked={!playable && !letterAt(r, c)}
-						class:focused={targets.focused === `cell-${r}-${c}`}
 						aria-label="Row {r + 1} column {c + 1}"
 					>
 						{#if targets.focused === `cell-${r}-${c}`}
@@ -591,7 +584,6 @@
 		use:target={{ id: 'close', legal: (stage === 'held' || stage === 'zoom') && !leaving, confirm: closeStep }}
 		class="action close back-corner"
 		class:gone={stage !== 'held' && stage !== 'zoom'}
-		class:focused={targets.focused === 'close'}
 	>
 		<span>✕</span>
 		{stage === 'zoom' ? 'Zoom out' : 'Put back'}
@@ -599,32 +591,32 @@
 
 	{#if stage === 'done'}
 		{@const again = restartDemo ?? (snap.canRestart && session.restart ? () => session.restart?.() : null)}
-		{#if again}
+		<!-- A scripted ending moves on by itself, so there is nothing to choose. -->
+		{#if !end.scripted}
+			{#if again}
+				<button
+					use:target={{ id: 'again', legal: end.buttons && !leaving, confirm: again }}
+					class="action far-corner bg-emerald-700"
+					class:off={!end.buttons}
+				>
+					{restartDemo ? '↺ Restart' : 'Play again'}
+				</button>
+			{/if}
 			<button
-				use:target={{ id: 'again', legal: endButtons, confirm: again }}
-				class="action far-corner bg-emerald-700"
-				class:off={!endButtons}
-				class:focused={targets.focused === 'again'}
+				use:target={{ id: 'menu', legal: end.buttons && !leaving, confirm: onExit }}
+				class="action exit"
+				class:far-corner={!again}
+				class:menu-corner={!!again}
+				class:off={!end.buttons}
 			>
-				{restartDemo ? '↺ Restart' : 'Play again'}
+				✕ Menu
 			</button>
 		{/if}
-		<button
-			use:target={{ id: 'menu', legal: endButtons, confirm: onExit }}
-			class="action exit"
-			class:far-corner={!again}
-			class:menu-corner={!!again}
-			class:off={!endButtons}
-			class:focused={targets.focused === 'menu'}
-		>
-			✕ Menu
-		</button>
 	{:else}
 		<button
 			use:target={{ id: 'play', legal: canPlay, confirm: playWord }}
 			class="action far-corner bg-emerald-700"
 			class:off={!canPlay}
-			class:focused={targets.focused === 'play'}
 		>
 			Play
 		</button>
@@ -633,14 +625,7 @@
 
 {#if snap.ended?.won}<Confetti />{/if}
 
-<GameExit
-	show={snap.canLeave && stage !== 'done' && stage !== 'blank'}
-	bind:leaving
-	onExit={restartDemo ?? onExit}
-	question={restartDemo ? 'Restart the demo?' : undefined}
-	label={restartDemo ? 'Restart' : undefined}
-	icon={restartDemo ? '↺' : undefined}
-/>
+<GameExit show={snap.canLeave && stage !== 'done' && stage !== 'blank'} bind:leaving {onExit} {restartDemo} />
 
 {#if stage === 'blank'}
 	<div transition:fade={{ duration: 200 }} class="fixed inset-0 z-[5] bg-black/70"></div>
@@ -648,7 +633,6 @@
 	<button
 		use:target={{ id: 'blank-close', legal: !leaving, confirm: closeBlank }}
 		class="blank-close"
-		class:focused={targets.focused === 'blank-close'}
 	>
 		✕ {blankGroup ? 'Back' : 'Put back'}
 	</button>
@@ -656,9 +640,13 @@
 		{#if blankGroup}
 			{#each [...blankGroup] as letter (letter)}
 				<button
-					use:target={{ id: `blank-${letter}`, legal: !leaving, confirm: () => chooseBlank(letter) }}
+					use:target={{
+						id: `blank-${letter}`,
+						legal: !leaving,
+						group: 'blank-letters',
+						confirm: () => chooseBlank(letter)
+					}}
 					class="blank-choice"
-					class:focused={targets.focused === `blank-${letter}`}
 				>
 					{letter}
 				</button>
@@ -666,9 +654,13 @@
 		{:else}
 			{#each LETTER_GROUPS as group (group)}
 				<button
-					use:target={{ id: `group-${group}`, legal: !leaving, confirm: () => (blankGroup = group) }}
+					use:target={{
+						id: `group-${group}`,
+						legal: !leaving,
+						group: 'letter-groups',
+						confirm: () => (blankGroup = group)
+					}}
 					class="blank-choice group"
-					class:focused={targets.focused === `group-${group}`}
 				>
 					{group[0]}–{group[group.length - 1]}
 				</button>
@@ -693,13 +685,22 @@
 	 * that are legal together need 220px between them for those zones not to overlap. In pixels,
 	 * because the reach is. 712px is what's left for the board's two margins when the close button
 	 * (left) and the Leave button (right) both keep that distance from it.
+	 *
+	 * Below about 1150px wide, as on a laptop zoomed in, that would leave almost no board. There it
+	 * grows to 27.5rem instead, as long as it still clears the buttons down each side (31rem for
+	 * both). Those reaches then overlap a little, but the board only takes a nod while a tile is
+	 * held, and the squares only when the pointer is inside one.
 	 */
 	.table {
 		--rack-tile: min(5.5rem, 10vh);
 		--board-top: calc(3.5rem + var(--rack-tile));
-		--board: min(calc(100vh - var(--board-top) - 1rem), calc(100vw - 712px));
+		--board: min(
+			calc(100vh - var(--board-top) - 1rem),
+			max(calc(100vw - 712px), min(calc(100vw - 31rem), 27.5rem))
+		);
 		--board-left: calc((100vw - var(--board) - 1.5rem) / 2);
-		--cue: 15rem;
+		/* The picture shrinks to stay in the margin, when the board is wide for the screen. */
+		--cue: min(15rem, calc(var(--board-left) - 1.5rem));
 		position: relative;
 		height: 100%;
 		width: 100%;
@@ -719,6 +720,14 @@
 		left: 0;
 		right: 1.5rem;
 		color: #6ee7b7;
+	}
+	/* Narrow, the words get more of the width, so they don't wrap down onto the rack. */
+	@media (max-width: 1151px) {
+		.headline:not(.done) {
+			right: 10rem;
+			font-size: 1.25rem;
+			line-height: 1.6rem;
+		}
 	}
 	/* Up high to save the neck, and stopping 120px short of the Leave button. */
 	/*
@@ -827,7 +836,7 @@
 	.spot.blocked {
 		background: rgb(2 6 23 / 0.55);
 	}
-	.spot.focused {
+	.spot:global([data-focused]) {
 		background: rgb(253 224 71 / 0.25);
 		box-shadow: inset 0 0 0 calc(5px + var(--press, 0) * 12px) #fde047;
 		z-index: 1;
@@ -990,8 +999,8 @@
 		color: white;
 		transition: transform 90ms ease-out;
 	}
-	.blank-choice.focused,
-	.blank-close.focused {
+	.blank-choice:global([data-focused]),
+	.blank-close:global([data-focused]) {
 		transform: scale(calc(1.08 - var(--press, 0) * 0.08));
 		box-shadow:
 			0 0 0 4px #fde047,
@@ -1022,15 +1031,15 @@
 		visibility: hidden;
 	}
 	/* No lift for a rack tile, or it would cover the words just above it. */
-	.rack-tile.focused {
+	.rack-tile:global([data-focused]) {
 		transform: translateY(calc(var(--press, 0) * 0.5rem)) scale(calc(1.14 - var(--press, 0) * 0.1));
 	}
-	.action.focused {
+	.action:global([data-focused]) {
 		transform: translateY(calc(-0.9rem + var(--press, 0) * 1rem))
 			scale(calc(1.14 - var(--press, 0) * 0.1));
 	}
-	.rack-tile.focused,
-	.action.focused {
+	.rack-tile:global([data-focused]),
+	.action:global([data-focused]) {
 		opacity: 1;
 		box-shadow:
 			0 0 0 4px #fde047,
