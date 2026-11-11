@@ -22,28 +22,43 @@ export function loadLexicon(): Promise<Lexicon> {
 	return lexicon;
 }
 
+/**
+ * The Scrabble bot, thinking in a worker. Once the worker has failed it stays failed, so every later
+ * request is refused at once rather than waiting for an answer that will never come.
+ */
 function workerBot(): { bot: ScrabbleBot; stop: () => void } {
-	const worker = new Worker(new URL('../games/scrabble/bot.worker.ts', import.meta.url), { type: 'module' });
-	let nextId = 0;
+	let failed: Error | null = null;
+	let worker: Worker | null = null;
 	const waiting = new Map<number, { resolve: (a: ScrabbleAction) => void; reject: (e: Error) => void }>();
-	worker.onmessage = (e: MessageEvent<{ id: number; action?: ScrabbleAction; error?: string }>) => {
-		const entry = waiting.get(e.data.id);
-		waiting.delete(e.data.id);
-		if (e.data.action) entry?.resolve(e.data.action);
-		else entry?.reject(new Error(e.data.error));
-	};
-	worker.onerror = (e) => {
-		for (const entry of waiting.values()) entry.reject(new Error(e.message));
+	const fail = (error: Error) => {
+		failed = error;
+		for (const entry of waiting.values()) entry.reject(error);
 		waiting.clear();
+		worker?.terminate();
 	};
+	try {
+		worker = new Worker(new URL('../games/scrabble/bot.worker.ts', import.meta.url), { type: 'module' });
+		worker.onmessage = (e: MessageEvent<{ id: number; action?: ScrabbleAction; error?: string }>) => {
+			const entry = waiting.get(e.data.id);
+			waiting.delete(e.data.id);
+			if (e.data.action) entry?.resolve(e.data.action);
+			else entry?.reject(new Error(e.data.error));
+		};
+		worker.onerror = (e) => fail(new Error(e.message || 'The bot worker failed'));
+		worker.onmessageerror = () => fail(new Error('The bot worker sent something unreadable'));
+	} catch (e) {
+		failed = e instanceof Error ? e : new Error(String(e));
+	}
+	let nextId = 0;
 	return {
 		bot: (state, seat) =>
 			new Promise((resolve, reject) => {
+				if (failed || !worker) return reject(failed ?? new Error('No bot worker'));
 				const id = nextId++;
 				waiting.set(id, { resolve, reject });
 				worker.postMessage({ id, state, seat, seed: (Date.now() + id) >>> 0 });
 			}),
-		stop: () => worker.terminate()
+		stop: () => worker?.terminate()
 	};
 }
 

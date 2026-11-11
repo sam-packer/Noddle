@@ -10,6 +10,12 @@ const ME = 0;
 const BOT = 1;
 /** Gives the player time to see the board settle, however quickly the bot decides. */
 const BOT_MIN_MS = 1200;
+/** A bot that hasn't answered by now never will, so it passes and the game goes on. */
+const BOT_GIVE_UP_MS = 15000;
+const NO_WORDS_NOTE = "The word list didn't load, so words can't be checked yet";
+const NO_WORDS = new RuleError('no-dictionary', "The word list didn't load, so that word can't be checked. Try again in a moment.");
+/** Passing and exchanging never look a word up. */
+const UNUSED_LEXICON: Lexicon = { has: () => false };
 
 export type ScrabbleBot = (state: ScrabbleState, seat: number) => Promise<ScrabbleAction>;
 
@@ -17,7 +23,9 @@ export type ScrabbleBot = (state: ScrabbleState, seat: number) => Promise<Scrabb
 export class LocalScrabbleSession implements GameSession<ScrabbleView, ScrabbleAction> {
 	private state: ScrabbleState;
 	private lexicon: Lexicon | null = null;
-	readonly ready: Promise<void>;
+	/** Moves are handled one at a time, in order, as each may wait for the word list. */
+	private turns: Promise<void>;
+	private loadLexicon: () => Promise<Lexicon>;
 	private closed = false;
 	private game = 0;
 	private seed: number;
@@ -38,6 +46,7 @@ export class LocalScrabbleSession implements GameSession<ScrabbleView, ScrabbleA
 		this.wait = options.wait ?? realWait;
 		this.bot = options.bot;
 		this.onClose = options.onClose;
+		this.loadLexicon = options.lexicon;
 		this.state = newGame({ players: NAMES.length, seed: this.seed });
 		this.store = new SnapshotStore<ScrabbleView>({
 			view: viewFor(this.state, ME),
@@ -52,10 +61,23 @@ export class LocalScrabbleSession implements GameSession<ScrabbleView, ScrabbleA
 			canRestart: true
 		});
 		this.subscribe = this.store.subscribe;
-		this.ready = options.lexicon().then(
-			(l) => void (this.lexicon = l),
-			() => void (this.lexicon = { has: () => true })
-		);
+		this.turns = this.words().then((words) => {
+			if (!words && !this.store.value.note) this.store.set({ note: NO_WORDS_NOTE });
+		});
+	}
+
+	/**
+	 * The word list, trying again if it failed before. Unlike the demo, a real game never accepts a
+	 * word it can't check, so without the list a play is refused with a reason.
+	 */
+	private async words(): Promise<Lexicon | null> {
+		if (this.lexicon) return this.lexicon;
+		try {
+			this.lexicon = await this.loadLexicon();
+		} catch {
+			return null;
+		}
+		return this.lexicon;
 	}
 
 	private show(active: number | null) {
@@ -71,31 +93,45 @@ export class LocalScrabbleSession implements GameSession<ScrabbleView, ScrabbleA
 
 	send(action: Seatless<ScrabbleAction>) {
 		const game = this.game;
-		void this.ready.then(() => {
-			if (this.closed || game !== this.game || this.state.current !== ME || this.state.phase === 'over') return;
-			try {
-				this.state = apply(this.state, { ...action, seat: ME } as ScrabbleAction, this.lexicon!);
-			} catch (e) {
-				if (!(e instanceof RuleError)) throw e;
-				this.store.reject(e.message);
-				return;
-			}
-			this.show(this.state.phase === 'over' ? null : BOT);
-			if (this.state.phase !== 'over') void this.botTurn(game);
-		});
+		this.turns = this.turns
+			.then(async () => {
+				const lexicon = action.type === 'place' ? await this.words() : UNUSED_LEXICON;
+				if (this.closed || game !== this.game || this.state.current !== ME || this.state.phase === 'over') return;
+				if (!lexicon) {
+					this.store.reject(NO_WORDS);
+					return;
+				}
+				try {
+					this.state = apply(this.state, { ...action, seat: ME } as ScrabbleAction, lexicon);
+				} catch (e) {
+					if (!(e instanceof RuleError)) throw e;
+					this.store.reject(e);
+					return;
+				}
+				this.show(this.state.phase === 'over' ? null : BOT);
+				if (this.state.phase !== 'over') void this.botTurn(game);
+			})
+			// A bug in one move mustn't stop every move after it.
+			.catch((e) => console.error(e));
 	}
 
 	private async botTurn(game: number) {
 		const stale = () => this.closed || game !== this.game;
-		const [action] = await Promise.all([
-			this.bot(this.state, BOT).catch(() => ({ type: 'pass', seat: BOT }) as ScrabbleAction),
+		const pass: ScrabbleAction = { type: 'pass', seat: BOT };
+		const [chosen] = await Promise.all([
+			Promise.race([
+				this.bot(this.state, BOT).catch(() => pass),
+				realWait(BOT_GIVE_UP_MS).then(() => pass)
+			]),
 			this.wait(BOT_MIN_MS)
 		]);
+		// The bot's word comes from its own copy of the list, but it's still checked against this one.
+		const lexicon = chosen.type === 'place' ? await this.words() : UNUSED_LEXICON;
 		if (stale()) return;
 		try {
-			this.state = apply(this.state, action, this.lexicon!);
+			this.state = apply(this.state, lexicon ? chosen : pass, lexicon ?? UNUSED_LEXICON);
 		} catch {
-			this.state = apply(this.state, { type: 'pass', seat: BOT }, this.lexicon!);
+			this.state = apply(this.state, pass, UNUSED_LEXICON);
 		}
 		this.show(null);
 	}
