@@ -56,7 +56,6 @@
 			<button
 				use:target={{ id: `menu-${button.id}`, legal: true, confirm: button.confirm }}
 				class="choice"
-				class:focused={targets.focused === `menu-${button.id}`}
 				style:background={button.color}
 			>
 				<span class="title">{button.title}</span>
@@ -99,7 +98,7 @@
 		font-size: 1.25rem;
 		font-weight: 500;
 	}
-	.focused {
+	.choice:global([data-focused]) {
 		transform: scale(calc(1.06 - var(--press, 0) * 0.06));
 		box-shadow:
 			0 0 0 4px #fde047,

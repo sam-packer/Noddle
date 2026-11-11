@@ -795,13 +795,17 @@
 	.close-picker:global([data-focused]),
 	.picker:global([data-focused]),
 	.end-choice:global([data-focused]) {
-		z-index: 3;
 		transform: translateY(calc(-1.6rem + var(--press, 0) * 1.6rem))
 			scale(calc(1.16 - var(--press, 0) * 0.1));
 		box-shadow:
 			0 0 0 4px #fde047,
 			0 0 45px 14px rgb(253 224 71 / 0.75);
 		opacity: 1;
+	}
+	/* Raised over its neighbours. The pickers and corner buttons already sit higher. */
+	.uno-card:global([data-focused]),
+	.arrow:global([data-focused]) {
+		z-index: 3;
 	}
 	.seat {
 		position: relative;
