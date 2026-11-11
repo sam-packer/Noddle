@@ -55,8 +55,7 @@ bun run update:model # fetch Google's latest face landmarker model
 Polish here is driven by recordings of real play, so changes can be checked against what the player actually did.
 
 - **Every session on the dev server records itself** to `.recordings/sessions/`: head angles, the pointer, what was selected, every gesture and pick, and what the game was showing. It never records video, and production builds record nothing.
-- **Press `M` during play** to mark a mistake at that moment.
-- **Press `D` to open the debug panel.** The tools below only start while it's open, so a stray key can't start one.
+- **Press `D` to open the debug panel**, which also works on the live site. With it open, `M` marks a mistake at that moment and `C` recenters the pointer. The recording tools below only exist on the dev server and only start while the panel is open, so a stray key can't start one.
 - **Press `G`** for a guided recording of nods, shakes and normal head movement.
 - **`bun run report`** explains the newest session: a timeline, a list of moments worth checking, every movement that looked like a gesture but didn't count (with the detector's own reason), and a chart saved to `.recordings/reports/`. Pass a file to read an older one.
 - **`bun run replay`** runs the real detector over saved recordings and scores it against `scripts/labels.json`. Run it after any change to `src/lib/vision/gestures.ts`.

@@ -233,6 +233,8 @@
 		<button
 			use:target={{
 				id: r.id,
+				// Each layout's pieces form one row, so a drifting nod can still land on its neighbour.
+				group: r.id.split('-')[0],
 				legal: active && trial?.kind === 'pick',
 				exact: trial?.layout === 'grid',
 				confirm: () => finish(r.id === trial?.want ? 'hit' : 'wrong', r.id)

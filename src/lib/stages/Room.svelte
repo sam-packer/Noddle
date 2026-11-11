@@ -203,7 +203,7 @@
 			{:else if codeGroup}
 				{#each [...codeGroup] as character (character)}
 					<button
-						use:target={{ id: `code-${character}`, legal: true, confirm: () => pickCharacter(character) }}
+						use:target={{ id: `code-${character}`, legal: true, group: 'code-letters', confirm: () => pickCharacter(character) }}
 						class="choice"
 						class:focused={targets.focused === `code-${character}`}
 					>
@@ -213,7 +213,7 @@
 			{:else}
 				{#each CODE_GROUPS as group (group)}
 					<button
-						use:target={{ id: `code-group-${group}`, legal: true, confirm: () => (codeGroup = group) }}
+						use:target={{ id: `code-group-${group}`, legal: true, group: 'code-groups', confirm: () => (codeGroup = group) }}
 						class="choice group"
 						class:focused={targets.focused === `code-group-${group}`}
 					>
