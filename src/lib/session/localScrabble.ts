@@ -125,7 +125,7 @@ export class LocalScrabbleSession implements GameSession<ScrabbleView, ScrabbleA
 			]),
 			this.wait(BOT_MIN_MS)
 		]);
-		// The bot's word comes from its own copy of the list, but it's still checked against this one.
+		// The bot searches its own tree built from the same list, but its word is still checked here.
 		const lexicon = chosen.type === 'place' ? await this.words() : UNUSED_LEXICON;
 		if (stale()) return;
 		try {

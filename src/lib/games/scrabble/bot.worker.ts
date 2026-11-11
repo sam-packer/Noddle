@@ -3,27 +3,17 @@ import type { ScrabbleState } from './engine';
 import { buildTrie, type Trie } from './lexicon';
 
 /** Thinks away from the page, so even a slow move can never stall the head pointer. */
-let trie: Promise<Trie> | null = null;
+let trie: Trie | null = null;
 
-function loadTrie() {
-	trie ??= fetch('/dict/enable.txt')
-		.then((r) => {
-			if (!r.ok) throw new Error(`dictionary: ${r.status}`);
-			return r.text();
-		})
-		.then(buildTrie)
-		.catch((e) => {
-			// Try again on the next turn, rather than passing for the rest of the game.
-			trie = null;
-			throw e;
-		});
-	return trie;
-}
+type Request = { id: number; state: ScrabbleState; seat: number; seed: number; words?: string };
 
-self.onmessage = async (e: MessageEvent<{ id: number; state: ScrabbleState; seat: number; seed: number }>) => {
-	const { id, state, seat, seed } = e.data;
+self.onmessage = (e: MessageEvent<Request>) => {
+	const { id, state, seat, seed, words } = e.data;
 	try {
-		self.postMessage({ id, action: chooseAction(state, seat, await loadTrie(), seed) });
+		// The page fetches the word list once and hands it over with the first request.
+		if (words !== undefined) trie = buildTrie(words);
+		if (!trie) throw new Error('The bot was never given the word list');
+		self.postMessage({ id, action: chooseAction(state, seat, trie, seed) });
 	} catch (err) {
 		self.postMessage({ id, error: String(err) });
 	}

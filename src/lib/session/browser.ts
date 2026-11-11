@@ -5,15 +5,30 @@ import { DemoUnoSession } from './demoUno';
 import { LocalScrabbleSession, type ScrabbleBot } from './localScrabble';
 import { LocalUnoSession } from './localUno';
 
-let lexicon: Promise<Lexicon> | null = null;
+let words: Promise<string> | null = null;
 
-/** The word list, fetched once from this site, so it works with no internet. */
-export function loadLexicon(): Promise<Lexicon> {
-	lexicon ??= fetch('/dict/enable.txt')
+/**
+ * The word list, fetched once from this site, so it works with no internet. The page checks the
+ * player's words with it, and the bot worker is handed the same text rather than fetching its own.
+ */
+function loadWords(): Promise<string> {
+	words ??= fetch('/dict/enable.txt')
 		.then((r) => {
 			if (!r.ok) throw new Error(`dictionary: ${r.status}`);
 			return r.text();
 		})
+		.catch((e) => {
+			// Try again next time it's needed, rather than staying broken for the rest of the game.
+			words = null;
+			throw e;
+		});
+	return words;
+}
+
+let lexicon: Promise<Lexicon> | null = null;
+
+export function loadLexicon(): Promise<Lexicon> {
+	lexicon ??= loadWords()
 		.then(textLexicon)
 		.catch((e) => {
 			lexicon = null;
@@ -50,14 +65,19 @@ function workerBot(): { bot: ScrabbleBot; stop: () => void } {
 		failed = e instanceof Error ? e : new Error(String(e));
 	}
 	let nextId = 0;
+	/** Whether the worker has the word list yet. It gets it with its first request. */
+	let gaveWords = false;
 	return {
-		bot: (state, seat) =>
-			new Promise((resolve, reject) => {
+		bot: async (state, seat) => {
+			const text = gaveWords ? undefined : await loadWords();
+			return new Promise((resolve, reject) => {
 				if (failed || !worker) return reject(failed ?? new Error('No bot worker'));
 				const id = nextId++;
 				waiting.set(id, { resolve, reject });
-				worker.postMessage({ id, state, seat, seed: (Date.now() + id) >>> 0 });
-			}),
+				worker.postMessage({ id, state, seat, seed: (Date.now() + id) >>> 0, words: text });
+				gaveWords = true;
+			});
+		},
 		stop: () => worker?.terminate()
 	};
 }
