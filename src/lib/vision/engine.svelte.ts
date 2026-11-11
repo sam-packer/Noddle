@@ -1,4 +1,7 @@
-import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { FaceLandmarker } from '@mediapipe/tasks-vision';
+// The runtime comes from the installed package, so it always matches the JS that loads it.
+import wasmLoaderPath from '@mediapipe/tasks-vision/vision_wasm_internal.js?url';
+import wasmBinaryPath from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url';
 import { session } from '../session';
 import { HeadGestures, type Gesture, type NodStyle } from './gestures';
 import {
@@ -251,8 +254,7 @@ class VisionEngine {
 			this.resolution = `${video.videoWidth}×${video.videoHeight}`;
 
 			this.loadMessage = 'Loading face tracking';
-			const fileset = await FilesetResolver.forVisionTasks('/runtime/mediapipe');
-			this.landmarker = await FaceLandmarker.createFromOptions(fileset, {
+			this.landmarker = await FaceLandmarker.createFromOptions({ wasmLoaderPath, wasmBinaryPath }, {
 				baseOptions: { modelAssetPath: '/models/face_landmarker.task', delegate: 'GPU' },
 				runningMode: 'VIDEO',
 				numFaces: 3,
