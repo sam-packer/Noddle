@@ -15,7 +15,10 @@
 	const FOLLOW_DOTS = 4;
 	const DOT_MS = 1500;
 	const REST_MS = 500;
-	/** Each setting runs twice, in the order A B B A, so getting better with practice evens out. */
+	/**
+	 * Each setting runs twice, in the order A B B A, so getting better with practice evens out.
+	 * Normal is whatever the settings were when the run began.
+	 */
 	const VARIANTS = [
 		{ name: 'normal', yaw: setup.headRangeYawDeg, up: setup.headRangePitchDeg, down: setup.headRangeDownDeg },
 		{ name: 'steadier', yaw: 16, up: 15, down: 7 }
@@ -94,11 +97,24 @@
 	const trial = $derived(index >= 0 && index < trials.length ? trials[index] : null);
 	const finished = $derived(index >= trials.length);
 
+	/** The settings this run last put in place. */
+	let applied: (typeof VARIANTS)[number] | null = null;
+
 	function useVariant(name: string) {
 		const v = VARIANTS.find((x) => x.name === name)!;
 		setup.headRangeYawDeg = v.yaw;
 		setup.headRangePitchDeg = v.up;
 		setup.headRangeDownDeg = v.down;
+		applied = v;
+	}
+
+	/** Puts the settings back, unless something else, like the HUD, changed them since. */
+	function restore() {
+		const v = applied;
+		if (v && setup.headRangeYawDeg === v.yaw && setup.headRangePitchDeg === v.up && setup.headRangeDownDeg === v.down) {
+			useVariant('normal');
+		}
+		applied = null;
 	}
 
 	function begin(n: number) {
@@ -169,7 +185,7 @@
 		clearTimeout(timer);
 		clearInterval(dotTimer);
 		releaseCancel();
-		useVariant('normal');
+		restore();
 	});
 
 	const prompt = $derived(

@@ -15,13 +15,29 @@ export type EyeRun = {
 
 const STORE = 'runs';
 
+/** One connection, opened on first use and shared by every request after. */
+let db: Promise<IDBDatabase> | null = null;
+
 function open() {
-	return new Promise<IDBDatabase>((resolve, reject) => {
+	db ??= new Promise<IDBDatabase>((resolve, reject) => {
 		const req = indexedDB.open('noddle-eyes', 1);
 		req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
-		req.onsuccess = () => resolve(req.result);
-		req.onerror = () => reject(req.error);
+		req.onsuccess = () => {
+			const conn = req.result;
+			// Another tab upgrading, or the browser closing it, ends this one. The next use reopens.
+			conn.onversionchange = () => {
+				conn.close();
+				db = null;
+			};
+			conn.onclose = () => (db = null);
+			resolve(conn);
+		};
+		req.onerror = () => {
+			db = null;
+			reject(req.error);
+		};
 	});
+	return db;
 }
 
 async function request<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>) {
