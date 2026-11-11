@@ -4,10 +4,7 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { target, targets } from '../input/targets.svelte';
 	import { session as log } from '../session';
-	import type { ScrabbleAction, ScrabbleView } from '../games/scrabble/engine';
-	import type { UnoAction, UnoView } from '../games/uno/engine';
 	import { createRoom, RemoteSession, type GameKind, type LobbyState } from '../session/remote';
-	import type { GameSession } from '../session/types';
 	import GameExit from './GameExit.svelte';
 	import Scrabble from './Scrabble.svelte';
 	import Uno from './Uno.svelte';
@@ -134,6 +131,9 @@
 		!!lobby?.isHost && (lobby.game === 'uno' ? lobby.seats.length >= 1 : lobby.seats.length === 2)
 	);
 	const inGame = $derived(!!lobby?.hasView && lobby.phase !== 'lobby' && lobby.phase !== 'connecting');
+	// Each is the same object for as long as the room lasts, so a screen keeps its session.
+	const unoSession = $derived(inGame && lobby?.game === 'uno' ? (remote?.as('uno') ?? null) : null);
+	const scrabbleSession = $derived(inGame && lobby?.game === 'scrabble' ? (remote?.as('scrabble') ?? null) : null);
 	const link = $derived(lobby ? `${location.origin}/?room=${lobby.code}` : '');
 
 	$effect(() => {
@@ -265,16 +265,10 @@
 			✕ Back
 		</button>
 	</div>
-{:else if inGame && lobby}
-	{#if lobby.game === 'uno'}
-		<Uno
-			session={remote as unknown as GameSession<UnoView, UnoAction>}
-			onDone={leave}
-			onExit={leave}
-		/>
-	{:else}
-		<Scrabble session={remote as unknown as GameSession<ScrabbleView, ScrabbleAction>} onExit={leave} />
-	{/if}
+{:else if unoSession}
+	<Uno session={unoSession} onDone={leave} onExit={leave} />
+{:else if scrabbleSession}
+	<Scrabble session={scrabbleSession} onExit={leave} />
 {:else}
 	<div class="relative h-full w-full">
 		<p class="absolute top-[6%] w-full text-center text-3xl text-slate-300">Room code</p>
@@ -285,7 +279,9 @@
 
 		<ul class="seats">
 			{#each lobby?.seats ?? [] as seat, i (i)}
-				<li>{seat.name}{i === lobby?.you ? ' (you)' : ''}</li>
+				<li class:away={!seat.connected}>
+					{seat.name}{i === lobby?.you ? ' (you)' : ''}{seat.connected ? '' : ' (away)'}
+				</li>
 			{/each}
 			{#if !lobby?.seats.length}<li class="text-slate-400">Connecting…</li>{/if}
 		</ul>
@@ -466,6 +462,9 @@
 		font-size: 2rem;
 		font-weight: 600;
 		line-height: 1.6;
+	}
+	.away {
+		color: #94a3b8;
 	}
 	.wait {
 		position: absolute;
