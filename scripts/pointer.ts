@@ -4,7 +4,7 @@
  * the head is still. `bun run pointer` Only the smoothing is tested, so no browser is needed.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { HeadSmoother, smootherConfig } from '../src/lib/vision/headSmoother';
+import { HeadSmoother, smootherConfig } from './headSmoother';
 import { OneEuro } from '../src/lib/vision/math';
 
 type Sample = { t: number; yaw: number; pitch: number };
